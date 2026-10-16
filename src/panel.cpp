@@ -47,7 +47,7 @@ void DrawPanel( Canvas &c, ButtonPanel &bp, const PanelModel &m, const PanelCall
 	c.Clear( 0.07, 0.08, 0.11 );
 
 	// ---- left column: state, reset, quick moves, settings -------------------------------------------------------------
-	c.Text( "Frame Mover", kLeftX, 64, 42, 1, 1, 1, true );
+	c.Text( "FrameMover", kLeftX, 64, 42, 1, 1, 1, true );
 
 	std::string status;
 	double sr = 0.55, sg = 0.85, sb = 0.6;

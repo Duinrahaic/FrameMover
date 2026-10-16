@@ -55,7 +55,7 @@
   "localization": [
     {
       "language_tag": "en_US",
-      "/actions/playspace": "Frame Mover",
+      "/actions/playspace": "FrameMover",
       "/actions/playspace/in/drag": "Grab and move the playspace (hold, then move the hand)",
       "/actions/playspace/in/turn": "Grab and turn the playspace around you (hold, then swing the hand around your head)",
       "/actions/playspace/in/snapturnleft": "Snap turn the playspace left",

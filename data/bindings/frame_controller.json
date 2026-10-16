@@ -112,9 +112,9 @@
   },
   "category": "steamvr_input",
   "controller_type": "frame_controller",
-  "description": "Default bindings for the Frame Mover",
+  "description": "Default bindings for FrameMover",
   "interaction_profile": "",
-  "name": "Frame Mover default",
+  "name": "FrameMover default",
   "options": {},
   "simulated_actions": []
 }

@@ -15,6 +15,8 @@
 #include <string>
 #include <vector>
 
+#include <spawn.h>
+#include <sys/wait.h>
 #include <fcntl.h>
 #include <sys/file.h>
 #include <sys/stat.h>
@@ -37,9 +39,11 @@ struct Paths
 	std::string actionManifest = dataDir + "/action_manifest.json";
 	std::string binding = dataDir + "/bindings/frame_controller.json";
 	std::string manifest = dataDir + "/frame-mover.vrmanifest";
-	std::string icon = dataDir + "/icon.png";
+	std::string iconDir = Home() + "/.local/share/icons/hicolor/128x128/apps";
+	std::string icon = iconDir + "/frame-mover.png";
 	std::string header = dataDir + "/header.png";
 	std::string capsule = dataDir + "/capsule.png";
+	std::string desktop = Home() + "/.local/share/applications/frame-mover.desktop";
 };
 
 void MakeDirs( const std::string &dir )
@@ -112,6 +116,15 @@ bool WriteArt( const std::string &path, int w, int h, double glyphFraction, doub
 	return c.WritePng( path.c_str() );
 }
 
+// Launcher icon: the glyph's own rounded square on a transparent surround. The alpha channel matters: cairo writes opaque images as
+// RGB, which Steam's icon loader rejected for the other apps' RGB icons.
+bool WriteIcon( const std::string &path, int size )
+{
+	Canvas c( size, size );
+	DrawGlyph( c, size / 2.0, size / 2.0, size * 0.875 );
+	return c.WritePng( path.c_str() );
+}
+
 std::string ManifestJson( const Paths &p )
 {
 	return std::string( "{\n  \"source\": \"user\",\n  \"applications\": [\n    {\n" ) + "      \"app_key\": \"" + kAppKey + "\",\n" +
@@ -119,8 +132,35 @@ std::string ManifestJson( const Paths &p )
 		"      \"binary_path_linux_arm\": \"" + p.bin + "\",\n" + "      \"action_manifest_path\": \"" + p.actionManifest + "\",\n" +
 		"      \"image_path\": \"header.png\",\n" + "      \"image_path_capsule\": \"capsule.png\",\n" +
 		"      \"is_dashboard_overlay\": true,\n" + "      \"show_overlay_in_quicklaunch\": true,\n" +
-		"      \"strings\": { \"en_us\": { \"name\": \"Frame Mover\", \"description\": \"Move, turn and reset your playspace\" } }\n" +
+		"      \"strings\": { \"en_us\": { \"name\": \"FrameMover\", \"description\": \"Move, turn and reset your playspace\" } }\n" +
 		"    }\n  ]\n}\n";
+}
+
+// The Frame's launcher lists the user's desktop entries; the SteamVR manifest alone does not put the app there.
+// The icon is referenced by theme name (hicolor), as the other Frame apps do, so the launcher resolves it the same way.
+// Launching it again while it runs just asks the running copy to show its dashboard tab (see BecomeOnlyInstance).
+std::string DesktopEntry( const Paths &p )
+{
+	return "[Desktop Entry]\nType=Application\nName=FrameMover\nComment=Move, turn and reset your playspace\n"
+		   "Exec=\"" + p.bin + "\" --show-dashboard\nIcon=frame-mover\nTerminal=false\nCategories=Utility;\n";
+}
+
+void Run( const char *prog, std::vector<std::string> args )
+{
+	args.insert( args.begin(), prog );
+	std::vector<char *> argv;
+	for ( std::string &a : args )
+		argv.push_back( a.data() );
+	argv.push_back( nullptr );
+	pid_t pid;
+	if ( posix_spawnp( &pid, prog, nullptr, nullptr, argv.data(), environ ) == 0 )
+		waitpid( pid, nullptr, 0 );
+}
+
+void RefreshLauncherCaches()
+{
+	Run( "update-desktop-database", { Home() + "/.local/share/applications" } );
+	Run( "gtk-update-icon-cache", { "-f", "-t", Home() + "/.local/share/icons/hicolor" } );
 }
 
 std::string LockPath()
@@ -159,14 +199,17 @@ int InstallApp()
 		fprintf( stderr, "cannot copy the action manifest and default bindings from %s\n", srcData.c_str() );
 		return 1;
 	}
-	if ( !WriteArt( p.icon, 256, 256, 0.8, 0.5, {}, 0, 0, 0 ) ||
-		!WriteArt( p.header, 920, 430, 0.29, 0.385, { "Frame Mover" }, 0.90, 56, 0 ) ||
-		!WriteArt( p.capsule, 600, 900, 0.62, 0.38, { "Frame", "Mover" }, 0.69, 92, 100 ) || !WriteFile( p.manifest, ManifestJson( p ) ) )
+	MakeDirs( Home() + "/.local/share/applications" );
+	MakeDirs( p.iconDir );
+	if ( !WriteIcon( p.icon, 128 ) || !WriteArt( p.header, 920, 430, 0.29, 0.385, { "FrameMover" }, 0.90, 56, 0 ) ||
+		!WriteArt( p.capsule, 600, 900, 0.62, 0.38, { "FrameMover" }, 0.69, 80, 0 ) || !WriteFile( p.manifest, ManifestJson( p ) ) ||
+		!WriteFile( p.desktop, DesktopEntry( p ) ) )
 	{
-		fprintf( stderr, "cannot write the SteamVR manifest and artwork under %s\n", p.dataDir.c_str() );
+		fprintf( stderr, "cannot write the SteamVR manifest, desktop entry, icon and artwork under %s\n", p.dataDir.c_str() );
 		return 1;
 	}
-	printf( "installed %s and its data in %s\n", p.bin.c_str(), p.dataDir.c_str() );
+	RefreshLauncherCaches();
+	printf( "installed %s and its data in %s, and the desktop entry %s\n", p.bin.c_str(), p.dataDir.c_str(), p.desktop.c_str() );
 	const std::string backups = BackupChaperoneFile();
 	if ( !backups.empty() )
 		printf( "saved a copy of your current chaperone file in %s\n", backups.c_str() );
@@ -175,9 +218,10 @@ int InstallApp()
 	VR_Init( &err, VRApplication_Utility );
 	if ( err != VRInitError_None )
 	{
-		fprintf( stderr, "SteamVR is not running (%s): the files are installed, but SteamVR does not know about the app yet.\n"
+		fprintf( stderr, "cannot connect to SteamVR (%s)%s: the files are installed, but SteamVR does not know about the app yet.\n"
 						 "Start SteamVR and run `%s --install` again.\n",
-			VR_GetVRInitErrorAsEnglishDescription( err ), p.bin.c_str() );
+			VR_GetVRInitErrorAsEnglishDescription( err ),
+			err == VRInitError_Init_PathRegistryNotFound ? ", it cannot find ~/.config/openvr/openvrpaths.vrpath" : "", p.bin.c_str() );
 		return 2;
 	}
 	IVRApplications *apps = VRApplications();
@@ -207,14 +251,16 @@ int UninstallApp()
 		VR_Shutdown();
 	}
 	else
-		fprintf( stderr, "SteamVR is not running (%s): its registration cannot be removed now; it disappears once the manifest file is gone.\n",
+		fprintf( stderr, "cannot connect to SteamVR (%s): its registration cannot be removed now; it disappears once the manifest file is gone.\n",
 			VR_GetVRInitErrorAsEnglishDescription( err ) );
-	for ( const std::string &f : { p.manifest, p.icon, p.header, p.capsule, p.actionManifest, p.binding } )
+	for ( const std::string &f : { p.manifest, p.icon, p.dataDir + "/icon.png" /* before the icon moved to the hicolor theme */, p.header, p.capsule,
+			   p.actionManifest, p.binding, p.desktop } )
 		unlink( f.c_str() );
 	rmdir( ( p.dataDir + "/bindings" ).c_str() );
 	rmdir( p.dataDir.c_str() ); // fails (and keeps everything) while chaperone backups are in it
 	unlink( p.bin.c_str() );
-	printf( "removed the program and its SteamVR registration (settings in ~/.config/frame-mover and chaperone backups are kept)\n" );
+	RefreshLauncherCaches();
+	printf( "removed the program, its desktop entry and its SteamVR registration (settings in ~/.config/frame-mover and chaperone backups are kept)\n" );
 	return 0;
 }
 

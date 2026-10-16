@@ -35,10 +35,11 @@ The mover edits SteamVR's *working copy* of the standing and seated zero poses (
 
 **Double-press + hold** (like OVR Advanced Settings): grab and turn only start when you tap the button, release, and press it again within 0.4 s and keep holding it. A single press, which a game may use the same button for, never grabs the world. The grab ends when you let go, and you feel a short buzz when it starts. Switch it off in the panel ("Double-press + hold to grab") to grab on a plain hold. A button bound as *toggle* in SteamVR's editor can not be double-pressed, so turn the option off if you bind one of them that way.
 
-Change any of them: dashboard tab **Frame Mover** > **Edit bindings in SteamVR**. The panel shows what each action is
+Change any of them: dashboard tab **FrameMover** > **Edit bindings in SteamVR**. The panel shows what each action is
 currently bound to and updates as soon as SteamVR reloads the bindings (it listens for SteamVR's binding events). SteamVR loads
-bindings per controller type, so until a controller has connected in the current SteamVR session every action reads
-"not bound" (the panel says so). By default your game still sees those buttons too; to withhold them from the game set
+bindings per controller type, so until a controller has connected in the current SteamVR session it has nothing to report: if you
+have not saved bindings of your own, the panel then shows the defaults from `data/bindings/frame_controller.json` (which is what will
+apply); if you have, it shows "not bound" (the panel says so). By default your game still sees those buttons too; to withhold them from the game set
 `overrideGameInput=1` in `~/.config/frame-mover/config.ini` and enable SteamVR's developer setting
 "Experimental overlay input overrides".
 
@@ -51,7 +52,8 @@ lock height, per-hand enable, haptics. Settings are in `~/.config/frame-mover/co
 bar (artwork: `header.png`, `capsule.png`, generated at install time). SteamVR orders that bar by most recently launched, so
 the tile can sit in the second row until it has been used. Pressing the tile while the mover is already running starts a second
 copy, which tells the running one to open its dashboard tab (the pid is kept in `$XDG_RUNTIME_DIR/frame-mover.<uid>.lock`)
-and exits.
+and exits. `--install` also writes `~/.local/share/applications/frame-mover.desktop` (the Frame's launcher lists desktop entries) and
+`--uninstall` removes it.
 
 ## Build, install
 

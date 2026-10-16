@@ -89,7 +89,7 @@ bool App::Init( std::string &error )
 	if ( !m_inputOk )
 		fprintf( stderr, "SteamVR Input unavailable: %s\n", m_inputError.c_str() );
 
-	EVROverlayError oe = VROverlay()->CreateDashboardOverlay( kPanelKey, "Frame Mover", &m_panel, &m_thumb );
+	EVROverlayError oe = VROverlay()->CreateDashboardOverlay( kPanelKey, "FrameMover", &m_panel, &m_thumb );
 	if ( oe != VROverlayError_None )
 	{
 		error = std::string( "CreateDashboardOverlay failed: " ) + VROverlay()->GetOverlayErrorNameFromEnum( oe );
