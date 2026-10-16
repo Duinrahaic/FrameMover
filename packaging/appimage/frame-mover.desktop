@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Frame Mover installer
+Comment=Install or uninstall Frame Mover, the playspace mover for the Steam Frame
+Exec=AppRun
+Icon=frame-mover
+Categories=Utility;
+Terminal=false

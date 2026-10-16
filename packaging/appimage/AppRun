@@ -1,0 +1,66 @@
+#!/bin/sh
+# Entry point of the Frame Mover installer AppImage.
+#   (no arguments)   ask what to do (KDE/GTK dialog, or the terminal)
+#   install          same as `frame-mover --install`
+#   uninstall        same as `frame-mover --uninstall`
+HERE=$(dirname "$(readlink -f "$0")")
+BIN="$HERE/usr/bin/frame-mover"
+TITLE="Frame Mover installer"
+
+usage()
+{
+	cat >&2 <<USAGE
+usage: $(basename "${APPIMAGE:-$0}") [install | uninstall]
+
+  install     copy Frame Mover to ~/.local, register it with SteamVR, start it with SteamVR
+  uninstall   undo install (settings in ~/.config/frame-mover and chaperone backups are kept)
+
+Without an argument a dialog asks which one you want. SteamVR should be running so it can
+(un)register the app; otherwise the files are still handled and the output says what is left.
+USAGE
+}
+
+# Runs one action, shows its output in a dialog when there is no terminal to print to.
+run_gui()
+{
+	out=$("$BIN" "--$1" 2>&1)
+	rc=$?
+	[ -n "$out" ] || out="done"
+	if command -v kdialog >/dev/null 2>&1; then
+		if [ $rc -eq 0 ]; then kdialog --title "$TITLE" --msgbox "$out"; else kdialog --title "$TITLE" --error "$out"; fi
+	else
+		if [ $rc -eq 0 ]; then zenity --info --no-markup --title "$TITLE" --text "$out"; else zenity --error --no-markup --title "$TITLE" --text "$out"; fi
+	fi
+	exit $rc
+}
+
+case "${1:-}" in
+install | --install) exec "$BIN" --install ;;
+uninstall | --uninstall) exec "$BIN" --uninstall ;;
+-h | --help) usage; exit 0 ;;
+"") ;;
+*) usage; exit 1 ;;
+esac
+
+if command -v kdialog >/dev/null 2>&1; then
+	choice=$(kdialog --title "$TITLE" --menu "Frame Mover" install "Install" uninstall "Uninstall") || exit 0
+	run_gui "$choice"
+elif command -v zenity >/dev/null 2>&1; then
+	choice=$(zenity --list --title "$TITLE" --text "What do you want to do?" --column Action Install Uninstall) || exit 0
+	case "$choice" in
+	Install) run_gui install ;;
+	Uninstall) run_gui uninstall ;;
+	*) exit 0 ;;
+	esac
+elif [ -t 0 ]; then
+	printf '%s\n  1) Install\n  2) Uninstall\n  q) Quit\n> ' "$TITLE"
+	read -r answer
+	case "$answer" in
+	1) exec "$BIN" --install ;;
+	2) exec "$BIN" --uninstall ;;
+	*) exit 0 ;;
+	esac
+else
+	usage
+	exit 1
+fi

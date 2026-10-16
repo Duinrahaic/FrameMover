@@ -67,6 +67,21 @@ Needs `libopenvr_api.so` and headers from `/opt/steamvr` (override with `-DOPENV
 Other commands: `--selftest` (moves the live playspace for about a second through SteamVR, verifies, restores, verifies; with the
 headset on this briefly shifts your world), `--screenshot FILE.png` (renders the panel, no SteamVR), `--show-dashboard`.
 
+### AppImage installer
+
+`./packaging/appimage/build.sh` (run it on an aarch64 machine such as the Frame; it refuses anywhere else) builds `build/FrameMover-installer-<arch>.AppImage` (downloads `appimagetool` into `build/` on first use,
+unless it is already on PATH). It carries the program and its data and does what `--install` / `--uninstall` do, nothing more:
+
+```
+./FrameMover-installer-aarch64.AppImage              # asks: Install / Uninstall (kdialog or zenity, else the terminal)
+./FrameMover-installer-aarch64.AppImage install      # no dialog (also --install)
+./FrameMover-installer-aarch64.AppImage uninstall    # no dialog (also --uninstall)
+```
+
+It needs FUSE or `--appimage-extract-and-run`, plus the same system libraries as the program itself (cairo, Vulkan, `libopenvr_api.so`
+from `/opt/steamvr`). Have SteamVR running so the app can be (un)registered; otherwise the files are still installed or removed and the
+output says what is left. Uninstall keeps `~/.config/frame-mover` and the chaperone backups.
+
 ## Known risk: leaving while the dashboard panel is open
 
 The panel is drawn with `SetOverlayRaw` (pixels through shared memory). Killing the mover while the dashboard tab was open once

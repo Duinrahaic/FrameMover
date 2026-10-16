@@ -161,7 +161,7 @@ int InstallApp()
 	}
 	if ( !WriteArt( p.icon, 256, 256, 0.8, 0.5, {}, 0, 0, 0 ) ||
 		!WriteArt( p.header, 920, 430, 0.29, 0.385, { "Frame Mover" }, 0.90, 56, 0 ) ||
-		!WriteArt( p.capsule, 600, 900, 0.62, 0.38, { "Playspace", "Mover" }, 0.69, 92, 100 ) || !WriteFile( p.manifest, ManifestJson( p ) ) )
+		!WriteArt( p.capsule, 600, 900, 0.62, 0.38, { "Frame", "Mover" }, 0.69, 92, 100 ) || !WriteFile( p.manifest, ManifestJson( p ) ) )
 	{
 		fprintf( stderr, "cannot write the SteamVR manifest and artwork under %s\n", p.dataDir.c_str() );
 		return 1;
