@@ -84,7 +84,7 @@ output says what is left. Uninstall keeps `~/.config/frame-mover` and the chaper
 
 ## Playspace snapping back on its own
 
-Works with QuestLHSync on. In rare cases SteamVR still replaces the live playspace with the saved one and the floor height returns to the original. What is known:
+In rare cases SteamVR still replaces the live playspace with the saved one and the floor height returns to the original. What is known:
 
 * `CheckLivePreview` compares the zero pose SteamVR is really using (recovered from the headset's pose in raw space and in the standing
   universe) with the one the mover applied. On a mismatch while idle it logs one line (`live playspace differs from ours ...` with the three
