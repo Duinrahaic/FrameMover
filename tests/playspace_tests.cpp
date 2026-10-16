@@ -195,7 +195,6 @@ static void TestResetRestoresOriginalExactly()
 			CHECK( ps.Standing().m[r][c] == s0.m[r][c] );
 			CHECK( ps.Seated().m[r][c] == q0.m[r][c] );
 		}
-	CHECK( ps.HasBase() );
 }
 
 static void TestRebaseDiscardsMovement()
@@ -288,8 +287,64 @@ static void TestZeroPoseRecoveredFromDevicePoses()
 	CHECK( !NearPose( turned.Standing(), MakePlayspace().Standing(), 0.01, 0.01 ) );
 }
 
+// Compare the reduced transform with the original column-by-column algorithm, including tilted bases.
+static void TestTransformEquivalence()
+{
+	for ( int sample = 0; sample < 200; ++sample )
+	{
+		Mat34 base = YawedPose( sample * 0.17, { sample * 0.3, -1.2, -sample * 0.13 } );
+		const double pitch = sample * 0.11, c = std::cos( pitch ), s = std::sin( pitch );
+		for ( int col = 0; col < 3; ++col )
+		{
+			const double y = base.m[1][col], z = base.m[2][col];
+			base.m[1][col] = c * y - s * z;
+			base.m[2][col] = s * y + c * z;
+		}
+		Playspace ps;
+		ps.Rebase( base, base );
+		ps.Translate( { 0.2, -0.4, 1.7 } );
+		const double yaw = ( sample - 100 ) * 0.61;
+		ps.RotateAbout( { -1.5, 1.6, 0.7 }, yaw );
+		Mat34 expected;
+		for ( int col = 0; col < 4; ++col )
+		{
+			Vec3 v = RotateY( { base.m[0][col], base.m[1][col], base.m[2][col] }, yaw );
+			if ( col == 3 )
+				v = v + ps.Offset();
+			expected.m[0][col] = v.x;
+			expected.m[1][col] = v.y;
+			expected.m[2][col] = v.z;
+		}
+		CHECK( NearPose( ps.Standing(), expected, 1e-10, 1e-10 ) );
+		CHECK( NearPose( ps.Seated(), expected, 1e-10, 1e-10 ) );
+		CHECK( ps.InRange() );
+		CHECK( NearPose( base, base, 0, 0 ) );
+	}
+}
+
+static void TestPoseComparisonBoundaries()
+{
+	const Mat34 identity;
+	CHECK( NearPose( identity, YawedPose( 0.009, {} ), 0, 0.01 ) );
+	CHECK( !NearPose( identity, YawedPose( 0.011, {} ), 0, 0.01 ) );
+	CHECK( NearPose( YawedPose( M_PI - 0.001, {} ), YawedPose( -M_PI + 0.001, {} ), 0, 0.003 ) );
+	CHECK( NearPose( identity, YawedPose( M_PI, {} ), 0, M_PI ) );
+	CHECK( !NearPose( identity, identity, -1, 0 ) );
+	CHECK( !NearPose( identity, identity, 0, -1 ) );
+	CHECK( !NearPose( identity, identity, std::nan( "" ), 0 ) );
+	CHECK( !NearPose( identity, identity, 0, INFINITY ) );
+	Mat34 invalid;
+	invalid.m[0][0] = std::nan( "" );
+	CHECK( !NearPose( invalid, identity, 0.01, 0.01 ) );
+	invalid = identity;
+	invalid.m[0][3] = INFINITY;
+	CHECK( !NearPose( invalid, identity, 0.01, 0.01 ) );
+}
+
 int main()
 {
+	TestTransformEquivalence();
+	TestPoseComparisonBoundaries();
 	TestZeroPoseRecoveredFromDevicePoses();
 	TestDoublePressActivatesOnlyOnSecondHeldPress();
 	TestSinglePressAndLongFirstPressDoNotActivate();

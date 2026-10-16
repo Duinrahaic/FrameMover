@@ -21,27 +21,32 @@ std::string Fit( Canvas &c, std::string s, double size, double maxWidth )
 	if ( c.TextWidth( s, size ) <= maxWidth )
 		return s;
 	while ( !s.empty() && c.TextWidth( s + "...", size ) > maxWidth )
-		s.pop_back();
+	{
+		size_t end = s.size() - 1;
+		while ( end && ( (unsigned char)s[end] & 0xc0 ) == 0x80 )
+			--end;
+		s.resize( end ); // Keep UTF-8 binding names valid when shortening them.
+	}
 	return s + "...";
 }
 
 // "label     [-]  value  [+]"
-void Stepper( Canvas &c, ButtonPanel &bp, double y, const std::string &label, const std::string &value, std::function<void()> dec,
-	std::function<void()> inc )
+void Stepper( Canvas &c, ButtonPanel &bp, double y, const std::string &label, const std::string &value, PanelAction action,
+	double dec, double inc )
 {
 	c.Text( label, kLeftX, y + 34, 25, 0.85, 0.88, 0.92 );
-	bp.Add( { 470, y, 70, 48, "-", false, std::move( dec ) } );
+	bp.Add( { 470, y, 70, 48, "-", false, action, dec } );
 	c.Text( value, 550 + ( 160 - c.TextWidth( value, 25, true ) ) / 2, y + 34, 25, 1, 1, 1, true );
-	bp.Add( { 710, y, 70, 48, "+", false, std::move( inc ) } );
+	bp.Add( { 710, y, 70, 48, "+", false, action, inc } );
 }
 
-void Toggle( ButtonPanel &bp, double x, double y, const std::string &label, bool on, std::function<void()> flip )
+void Toggle( ButtonPanel &bp, double x, double y, const std::string &label, bool on, PanelAction action )
 {
-	bp.Add( { x, y, 362, 50, label + ( on ? ":  ON" : ":  OFF" ), on, std::move( flip ) } );
+	bp.Add( { x, y, 362, 50, label + ( on ? ":  ON" : ":  OFF" ), on, action, on ? 0.0 : 1.0 } );
 }
 } // namespace
 
-void DrawPanel( Canvas &c, ButtonPanel &bp, const PanelModel &m, const PanelCallbacks &cb, int hovered )
+void DrawPanel( Canvas &c, ButtonPanel &bp, const PanelModel &m, int hovered )
 {
 	bp.Clear();
 	c.Clear( 0.07, 0.08, 0.11 );
@@ -68,7 +73,7 @@ void DrawPanel( Canvas &c, ButtonPanel &bp, const PanelModel &m, const PanelCall
 	}
 	c.Text( Fit( c, status, 22, kLeftW ), kLeftX, 102, 22, sr, sg, sb );
 
-	bp.Add( { kLeftX, 124, kLeftW, 84, "Reset to original playspace", false, cb.reset } );
+	bp.Add( { kLeftX, 124, kLeftW, 84, "Reset to original playspace", false, PanelAction::Reset } );
 
 	if ( m.moved )
 	{
@@ -84,37 +89,27 @@ void DrawPanel( Canvas &c, ButtonPanel &bp, const PanelModel &m, const PanelCall
 
 	const Settings &s = m.settings;
 	const std::string snap = Fmt( "%.0f", s.snapDegrees ) + "\xC2\xB0";
-	bp.Add( { kLeftX, 266, 362, 58, "Raise me 5 cm", false, [cb] { if ( cb.raise ) cb.raise( 0.05 ); } } );
-	bp.Add( { 418, 266, 362, 58, "Lower me 5 cm", false, [cb] { if ( cb.raise ) cb.raise( -0.05 ); } } );
-	bp.Add( { kLeftX, 334, 362, 58, "Turn left " + snap, false, [cb, s] { if ( cb.turn ) cb.turn( -s.snapDegrees ); } } );
-	bp.Add( { 418, 334, 362, 58, "Turn right " + snap, false, [cb, s] { if ( cb.turn ) cb.turn( s.snapDegrees ); } } );
+	bp.Add( { kLeftX, 266, 362, 58, "Raise me 5 cm", false, PanelAction::Raise, 0.05 } );
+	bp.Add( { 418, 266, 362, 58, "Lower me 5 cm", false, PanelAction::Raise, -0.05 } );
+	bp.Add( { kLeftX, 334, 362, 58, "Turn left " + snap, false, PanelAction::Turn, -s.snapDegrees } );
+	bp.Add( { 418, 334, 362, 58, "Turn right " + snap, false, PanelAction::Turn, s.snapDegrees } );
 
-	auto change = [cb, s]( auto fn ) {
-		return [cb, s, fn] {
-			Settings n = s;
-			fn( n );
-			if ( cb.settingsChanged )
-				cb.settingsChanged( Clamped( n ) );
-		};
-	};
 	Stepper( c, bp, 424, "Grab speed", Fmt( "%.2f", s.dragMultiplier ) + "x",
-		change( [] ( Settings &n ) { n.dragMultiplier = std::round( ( n.dragMultiplier - 0.25f ) * 4 ) / 4; } ),
-		change( [] ( Settings &n ) { n.dragMultiplier = std::round( ( n.dragMultiplier + 0.25f ) * 4 ) / 4; } ) );
-	Stepper( c, bp, 482, "Snap turn angle", snap, change( [] ( Settings &n ) { n.snapDegrees -= 15; } ),
-		change( [] ( Settings &n ) { n.snapDegrees += 15; } ) );
-	Stepper( c, bp, 540, "Raise / lower speed", Fmt( "%.1f", s.heightSpeed ) + " m/s", change( [] ( Settings &n ) { n.heightSpeed -= 0.1f; } ),
-		change( [] ( Settings &n ) { n.heightSpeed += 0.1f; } ) );
+		PanelAction::DragMultiplier, std::round( ( s.dragMultiplier - 0.25f ) * 4 ) / 4, std::round( ( s.dragMultiplier + 0.25f ) * 4 ) / 4 );
+	Stepper( c, bp, 482, "Snap turn angle", snap, PanelAction::SnapDegrees, s.snapDegrees - 15, s.snapDegrees + 15 );
+	Stepper( c, bp, 540, "Raise / lower speed", Fmt( "%.1f", s.heightSpeed ) + " m/s", PanelAction::HeightSpeed,
+		s.heightSpeed - 0.1f, s.heightSpeed + 0.1f );
 
-	Toggle( bp, kLeftX, 612, "Lock height", s.lockHeight, change( [] ( Settings &n ) { n.lockHeight = !n.lockHeight; } ) );
-	Toggle( bp, 418, 612, "Haptics", s.haptics, change( [] ( Settings &n ) { n.haptics = !n.haptics; } ) );
-	Toggle( bp, kLeftX, 674, "Left hand grabs", s.leftHand, change( [] ( Settings &n ) { n.leftHand = !n.leftHand; } ) );
-	Toggle( bp, 418, 674, "Right hand grabs", s.rightHand, change( [] ( Settings &n ) { n.rightHand = !n.rightHand; } ) );
+	Toggle( bp, kLeftX, 612, "Lock height", s.lockHeight, PanelAction::LockHeight );
+	Toggle( bp, 418, 612, "Haptics", s.haptics, PanelAction::Haptics );
+	Toggle( bp, kLeftX, 674, "Left hand grabs", s.leftHand, PanelAction::LeftHand );
+	Toggle( bp, 418, 674, "Right hand grabs", s.rightHand, PanelAction::RightHand );
 
 	bp.Add( { kLeftX, 736, kLeftW, 50, std::string( "Double-press + hold to grab:  " ) + ( s.doublePress ? "ON" : "OFF" ), s.doublePress,
-		change( [] ( Settings &n ) { n.doublePress = !n.doublePress; } ) } );
+		PanelAction::DoublePress, s.doublePress ? 0.0 : 1.0 } );
 
-	Toggle( bp, kLeftX, 794, "Huge chaperone", s.largeChaperone, change( [] ( Settings &n ) { n.largeChaperone = !n.largeChaperone; } ) );
-	Toggle( bp, 418, 794, "No chaperone", s.disableChaperone, change( [] ( Settings &n ) { n.disableChaperone = !n.disableChaperone; } ) );
+	Toggle( bp, kLeftX, 794, "Huge chaperone", s.largeChaperone, PanelAction::LargeChaperone );
+	Toggle( bp, 418, 794, "No chaperone", s.disableChaperone, PanelAction::DisableChaperone );
 
 	c.Text( "Nothing is saved to SteamVR: Reset restores exactly the playspace", kLeftX, 868, 20, 0.55, 0.6, 0.66 );
 	c.Text( "and chaperone you had set.", kLeftX, 892, 20, 0.55, 0.6, 0.66 );
@@ -138,7 +133,7 @@ void DrawPanel( Canvas &c, ButtonPanel &bp, const PanelModel &m, const PanelCall
 		c.Text( Fit( c, b.second, 21, kRightW ), kRightX, y + 28, 21, bound ? 0.6 : 0.95, bound ? 0.8 : 0.6, bound ? 1.0 : 0.5 );
 		y += 72;
 	}
-	bp.Add( { kRightX, 782, kRightW, 70, "Edit bindings in SteamVR", false, cb.editBindings } );
+	bp.Add( { kRightX, 782, kRightW, 70, "Edit bindings in SteamVR", false, PanelAction::EditBindings } );
 
 	bp.Draw( c, hovered );
 }

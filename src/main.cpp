@@ -50,7 +50,7 @@ static int Screenshot( const char *path )
 		{ "Reset to original", "Left Hand View" } };
 	Canvas c( kPanelW, kPanelH );
 	ButtonPanel bp;
-	DrawPanel( c, bp, m, PanelCallbacks(), 1 );
+	DrawPanel( c, bp, m, 1 );
 	return c.WritePng( path ) ? 0 : 1;
 }
 

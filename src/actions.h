@@ -38,7 +38,7 @@ public:
 
 private:
 	uint64_t m_set = 0;
-	uint64_t m_drag = 0, m_turn = 0, m_snapL = 0, m_snapR = 0, m_up = 0, m_down = 0, m_reset = 0, m_haptic = 0;
+	uint64_t m_action[8] = {}; // input actions in Bindings() order, followed by haptics
 	uint64_t m_hand[2] = {};
 	int32_t m_priority = 0;
 	std::string m_lastGood[7]; // last non-empty binding text per action, see Bindings()

@@ -43,7 +43,6 @@ class Playspace
 public:
 	// Captures the untouched zero poses (what the user had set) and clears all movement.
 	void Rebase( const Mat34 &standing, const Mat34 &seated );
-	bool HasBase() const { return m_hasBase; }
 	// Back to the captured poses.
 	void Reset();
 
@@ -64,7 +63,6 @@ public:
 
 private:
 	Mat34 Apply( const Mat34 &base ) const;
-	bool m_hasBase = false;
 	Mat34 m_standing, m_seated;
 	double m_yaw = 0; // radians, unbounded
 	Vec3 m_t;

@@ -2,6 +2,7 @@
 
 #include "app.h"
 #include "backup.h"
+#include "files.h"
 #include "panel.h"
 #include "ui.h"
 
@@ -10,8 +11,6 @@
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
-#include <fstream>
-#include <iterator>
 #include <string>
 #include <vector>
 
@@ -23,15 +22,10 @@
 #include <unistd.h>
 
 using namespace vr;
+using namespace files;
 
 namespace
 {
-std::string Home()
-{
-	const char *h = getenv( "HOME" );
-	return h ? h : "";
-}
-
 struct Paths
 {
 	std::string bin = Home() + "/.local/bin/frame-mover";
@@ -46,29 +40,6 @@ struct Paths
 	std::string desktop = Home() + "/.local/share/applications/frame-mover.desktop";
 };
 
-void MakeDirs( const std::string &dir )
-{
-	for ( size_t i = 1; i <= dir.size(); i++ )
-		if ( i == dir.size() || dir[i] == '/' )
-			mkdir( dir.substr( 0, i ).c_str(), 0755 );
-}
-
-bool ReadFile( const std::string &path, std::string &out )
-{
-	std::ifstream in( path, std::ios::binary );
-	if ( !in )
-		return false;
-	out.assign( std::istreambuf_iterator<char>( in ), std::istreambuf_iterator<char>() );
-	return true;
-}
-
-bool WriteFile( const std::string &path, const std::string &text )
-{
-	std::ofstream out( path, std::ios::binary | std::ios::trunc );
-	out << text;
-	return out.good();
-}
-
 bool CopyFile( const std::string &from, const std::string &to )
 {
 	std::string data;
@@ -79,10 +50,10 @@ bool CopyFile( const std::string &from, const std::string &to )
 bool CopyExecutable( const std::string &from, const std::string &to )
 {
 	const std::string tmp = to + ".new";
-	if ( !CopyFile( from, tmp ) )
-		return false;
-	chmod( tmp.c_str(), 0755 );
-	return rename( tmp.c_str(), to.c_str() ) == 0;
+	if ( CopyFile( from, tmp ) && chmod( tmp.c_str(), 0755 ) == 0 && rename( tmp.c_str(), to.c_str() ) == 0 )
+		return true;
+	unlink( tmp.c_str() );
+	return false;
 }
 
 std::string SelfPath()
@@ -92,27 +63,17 @@ std::string SelfPath()
 	return n > 0 ? std::string( exe, (size_t)n ) : std::string();
 }
 
-// Glyph centred at (w/2, h*glyphY) plus optional title lines (first baseline at h*titleY, then `lineGap` pixels apart).
-// Titles shrink to stay inside 88 % of the width, so they never touch the edges.
-bool WriteArt( const std::string &path, int w, int h, double glyphFraction, double glyphY, const std::vector<std::string> &titleLines,
-	double titleY, double titleSize, double lineGap )
+// Glyph and title, kept inside 88 % of the width so the text never touches the edges.
+bool WriteArt( const std::string &path, int w, int h, double glyphFraction, double glyphY, double titleY, double titleSize )
 {
 	Canvas c( w, h );
 	c.Clear( 0.07, 0.08, 0.11 );
 	DrawGlyph( c, w / 2.0, h * glyphY, w * glyphFraction );
-	double size = titleSize;
-	for ( const std::string &line : titleLines )
-	{
-		const double width = c.TextWidth( line, size, true );
-		if ( width > w * 0.88 )
-			size *= w * 0.88 / width;
-	}
-	double y = h * titleY;
-	for ( const std::string &line : titleLines )
-	{
-		c.Text( line, ( w - c.TextWidth( line, size, true ) ) / 2, y, size, 1, 1, 1, true );
-		y += lineGap;
-	}
+	const std::string title = "FrameMover";
+	const double width = c.TextWidth( title, titleSize, true );
+	if ( width > w * 0.88 )
+		titleSize *= w * 0.88 / width;
+	c.Text( title, ( w - c.TextWidth( title, titleSize, true ) ) / 2, h * titleY, titleSize, 1, 1, 1, true );
 	return c.WritePng( path.c_str() );
 }
 
@@ -201,8 +162,8 @@ int InstallApp()
 	}
 	MakeDirs( Home() + "/.local/share/applications" );
 	MakeDirs( p.iconDir );
-	if ( !WriteIcon( p.icon, 128 ) || !WriteArt( p.header, 920, 430, 0.29, 0.385, { "FrameMover" }, 0.90, 56, 0 ) ||
-		!WriteArt( p.capsule, 600, 900, 0.62, 0.38, { "FrameMover" }, 0.69, 80, 0 ) || !WriteFile( p.manifest, ManifestJson( p ) ) ||
+	if ( !WriteIcon( p.icon, 128 ) || !WriteArt( p.header, 920, 430, 0.29, 0.385, 0.90, 56 ) ||
+		!WriteArt( p.capsule, 600, 900, 0.62, 0.38, 0.69, 80 ) || !WriteFile( p.manifest, ManifestJson( p ) ) ||
 		!WriteFile( p.desktop, DesktopEntry( p ) ) )
 	{
 		fprintf( stderr, "cannot write the SteamVR manifest, desktop entry, icon and artwork under %s\n", p.dataDir.c_str() );
@@ -228,12 +189,11 @@ int InstallApp()
 	EVRApplicationError ae = apps->AddApplicationManifest( p.manifest.c_str(), false );
 	if ( ae == VRApplicationError_None )
 		ae = apps->SetApplicationAutoLaunch( kAppKey, true );
+	if ( ae != VRApplicationError_None )
+		fprintf( stderr, "SteamVR rejected the manifest: %s\n", apps->GetApplicationsErrorNameFromEnum( ae ) );
 	VR_Shutdown();
 	if ( ae != VRApplicationError_None )
-	{
-		fprintf( stderr, "SteamVR rejected the manifest: %s\n", apps->GetApplicationsErrorNameFromEnum( ae ) );
 		return 1;
-	}
 	printf( "registered with SteamVR: listed in the quick-launch bar, starts automatically with SteamVR\n" );
 	return 0;
 }

@@ -1,47 +1,22 @@
 #include "backup.h"
+#include "files.h"
 
 #include <algorithm>
-#include <cstdlib>
+#include <cstdio>
 #include <ctime>
-#include <fstream>
-#include <iterator>
 #include <string>
 #include <vector>
 
 #include <dirent.h>
-#include <sys/stat.h>
 #include <unistd.h>
 
-namespace
-{
-std::string Home()
-{
-	const char *h = getenv( "HOME" );
-	return h ? h : "";
-}
-
-bool ReadAll( const std::string &path, std::string &out )
-{
-	std::ifstream in( path, std::ios::binary );
-	if ( !in )
-		return false;
-	out.assign( std::istreambuf_iterator<char>( in ), std::istreambuf_iterator<char>() );
-	return true;
-}
-
-void MakeDirs( const std::string &dir )
-{
-	for ( size_t i = 1; i <= dir.size(); i++ )
-		if ( i == dir.size() || dir[i] == '/' )
-			mkdir( dir.substr( 0, i ).c_str(), 0755 );
-}
-} // namespace
+using namespace files;
 
 std::string BackupChaperoneFile()
 {
 	const std::string src = Home() + "/.config/openvr/config/chaperone_info.vrchap";
 	std::string content;
-	if ( Home().empty() || !ReadAll( src, content ) || content.empty() )
+	if ( Home().empty() || !ReadFile( src, content ) || content.empty() )
 		return "";
 
 	const std::string dir = Home() + "/.local/share/frame-mover/backup";
@@ -56,7 +31,7 @@ std::string BackupChaperoneFile()
 			if ( name.size() < 8 || name.compare( name.size() - 7, 7, ".vrchap" ) != 0 )
 				continue;
 			std::string other;
-			if ( ReadAll( dir + "/" + name, other ) && other == content )
+			if ( ReadFile( dir + "/" + name, other ) && other == content )
 			{
 				closedir( d );
 				return dir; // this exact chaperone is already saved
@@ -67,20 +42,19 @@ std::string BackupChaperoneFile()
 		closedir( d );
 	}
 
-	char stamp[32];
-	const time_t t = time( nullptr );
+	char stamp[64];
+	timespec now;
+	if ( clock_gettime( CLOCK_REALTIME, &now ) != 0 )
+		return "";
 	struct tm tmv;
-	localtime_r( &t, &tmv );
-	strftime( stamp, sizeof stamp, "%Y%m%d-%H%M%S", &tmv );
-	{
-		std::ofstream out( dir + "/chaperone_info." + stamp + ".vrchap", std::ios::binary | std::ios::trunc );
-		out << content;
-	}
+	if ( !localtime_r( &now.tv_sec, &tmv ) )
+		return "";
+	const size_t n = strftime( stamp, sizeof stamp, "%Y%m%d-%H%M%S", &tmv );
+	snprintf( stamp + n, sizeof stamp - n, "-%09ld", now.tv_nsec );
+	if ( !WriteFile( dir + "/chaperone_info." + stamp + ".vrchap", content ) )
+		return ""; // never prune old backups after a failed write
 	std::sort( timestamped.begin(), timestamped.end() );
-	while ( timestamped.size() > 9 )
-	{
-		unlink( ( dir + "/" + timestamped.front() ).c_str() );
-		timestamped.erase( timestamped.begin() );
-	}
+	for ( size_t i = 9; i < timestamped.size(); i++ )
+		unlink( ( dir + "/" + timestamped[i - 9] ).c_str() );
 	return dir;
 }

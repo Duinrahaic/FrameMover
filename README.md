@@ -58,13 +58,24 @@ and exits. `--install` also writes `~/.local/share/applications/frame-mover.desk
 ## Build, install
 
 ```
-cmake -S . -B build && cmake --build build -j
-ctest --test-dir build --output-on-failure      # model unit tests, no SteamVR needed
+cmake -S . -B build -DCMAKE_BUILD_TYPE=MinSizeRel && cmake --build build -j
+ctest --test-dir build --output-on-failure      # pure tests, no SteamVR needed
 ./build/frame-mover --install         # copies to ~/.local, registers with SteamVR, autostarts with it
 ./build/frame-mover --uninstall
 ```
 
-Needs `libopenvr_api.so` and headers from `/opt/steamvr` (override with `-DOPENVR_LIB=... -DOPENVR_HEADERS=...`) and cairo.
+Needs `libopenvr_api.so` and headers from `/opt/steamvr` (override with `-DOPENVR_LIB=... -DOPENVR_HEADERS=...`), cairo and Vulkan.
+`MinSizeRel` is the default: size optimization, link-time optimization when supported, unused-section removal and stripped symbols.
+Use `-DCMAKE_BUILD_TYPE=Debug` for debugging. The installed app only needs the executable, bindings and generated artwork; source,
+tests, compiler and build directories are not installed. Cairo, Vulkan and OpenVR remain shared system dependencies.
+
+To run the pure model, binding, pixel and panel-command tests without graphics libraries or SteamVR:
+
+```
+cmake -S . -B build-tests -DFRAME_MOVER_BUILD_APP=OFF
+cmake --build build-tests
+ctest --test-dir build-tests --output-on-failure
+```
 
 Other commands: `--selftest` (moves the live playspace for about a second through SteamVR, verifies, restores, verifies; with the
 headset on this briefly shifts your world), `--screenshot FILE.png` (renders the panel, no SteamVR), `--show-dashboard`.

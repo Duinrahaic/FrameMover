@@ -1,4 +1,6 @@
 #include "app.h"
+#include "files.h"
+#include "vr_math.h"
 
 #include <unistd.h>
 
@@ -24,11 +26,6 @@ double Now()
 	return std::chrono::duration<double>( std::chrono::steady_clock::now().time_since_epoch() ).count();
 }
 
-std::string Home()
-{
-	const char *h = getenv( "HOME" );
-	return h ? h : "";
-}
 } // namespace
 
 std::string FindDataDir()
@@ -41,10 +38,10 @@ std::string FindDataDir()
 		dir.assign( exe, (size_t)n );
 		dir = dir.substr( 0, dir.rfind( '/' ) );
 	}
-	for ( const std::string &c : { dir + "/data", dir + "/../data", Home() + "/.local/share/frame-mover" } )
+	for ( const std::string &c : { dir + "/data", dir + "/../data", files::Home() + "/.local/share/frame-mover" } )
 		if ( access( ( c + "/action_manifest.json" ).c_str(), R_OK ) == 0 )
 			return c;
-	return Home() + "/.local/share/frame-mover";
+	return files::Home() + "/.local/share/frame-mover";
 }
 
 App::~App()
@@ -151,12 +148,6 @@ void App::Rebase()
 	m_panelDirty = true;
 }
 
-void App::ResetToOriginal()
-{
-	// Capture() hides our preview and reloads the saved copy, which is exactly what the user had before.
-	Rebase();
-}
-
 void App::Pause( bool restore )
 {
 	if ( restore )
@@ -176,13 +167,13 @@ void App::ApplyIfChanged()
 	if ( !m_playspace.Moved() )
 	{
 		if ( m_chaperone.PreviewShown() )
-			ResetToOriginal();
+			Rebase();
 		return;
 	}
 	if ( !m_playspace.InRange() )
 	{
 		fprintf( stderr, "playspace moved out of the range OpenVR accepts; resetting to the original\n" );
-		ResetToOriginal();
+		Rebase();
 		return;
 	}
 	if ( m_chaperone.Apply( m_playspace.Standing(), m_playspace.Seated(), m_settings.largeChaperone, m_settings.disableChaperone ) )
@@ -202,7 +193,7 @@ void App::CheckLivePreview( double now )
 {
 	if ( !m_chaperone.PreviewShown() || !m_playspace.Moved() || m_rebaseAt >= 0 || now < m_healBackoffUntil )
 		return;
-	if ( now - m_lastApply < 0.6 || m_drag[0].Active() || m_drag[1].Active() || m_turn[0].Active() || m_turn[1].Active() )
+	if ( now - m_lastApply < 0.6 || GestureActive() )
 		return; // just written, or being moved right now: the next write fixes it anyway
 	TrackedDevicePose_t raw[k_unTrackedDeviceIndex_Hmd + 1], stand[k_unTrackedDeviceIndex_Hmd + 1];
 	VRSystem()->GetDeviceToAbsoluteTrackingPose( TrackingUniverseRawAndUncalibrated, 0.0f, raw, k_unTrackedDeviceIndex_Hmd + 1 );
@@ -210,14 +201,7 @@ void App::CheckLivePreview( double now )
 	const TrackedDevicePose_t &r = raw[k_unTrackedDeviceIndex_Hmd], &s = stand[k_unTrackedDeviceIndex_Hmd];
 	if ( !r.bPoseIsValid || !s.bPoseIsValid || r.eTrackingResult != TrackingResult_Running_OK || s.eTrackingResult != TrackingResult_Running_OK )
 		return;
-	auto mat = []( const HmdMatrix34_t &h ) {
-		Mat34 m;
-		for ( int i = 0; i < 3; i++ )
-			for ( int j = 0; j < 4; j++ )
-				m.m[i][j] = h.m[i][j];
-		return m;
-	};
-	const Mat34 live = ZeroPoseFromPoses( mat( r.mDeviceToAbsoluteTracking ), mat( s.mDeviceToAbsoluteTracking ) );
+	const Mat34 live = ZeroPoseFromPoses( MatrixCast<Mat34>( r.mDeviceToAbsoluteTracking ), MatrixCast<Mat34>( s.mDeviceToAbsoluteTracking ) );
 	const Mat34 want = m_playspace.Standing();
 	if ( NearPose( live, want, 0.01, 0.01 ) )
 		return;
@@ -288,7 +272,7 @@ void App::HandleSystemEvent( const VREvent_t &ev )
 		if ( m_chaperone.PreviewShown() && Now() - m_lastApply < 0.5 && !m_chaperone.ModifiedByOthers() )
 			break;
 		[[fallthrough]];
-	case VREvent_ChaperoneRoomSetupFinished:
+	case 807: // RoomSetupCommitted in current OpenVR, formerly RoomSetupFinished.
 	case VREvent_ChaperoneUniverseHasChanged:
 	case VREvent_ChaperoneDataHasChanged:
 		// The saved playspace changed under us (new tracking universe, recenter, finished room setup): whatever we
@@ -302,6 +286,12 @@ void App::HandleSystemEvent( const VREvent_t &ev )
 	case VREvent_Input_ActionManifestReloaded:
 		fprintf( stderr, "SteamVR reloaded the bindings (%s)\n", VRSystem()->GetEventTypeNameFromEnum( (EVREventType)ev.eventType ) );
 		m_bindingsStale = true; // the user changed the bindings in SteamVR: re-read them
+		break;
+	case VREvent_TrackedDeviceActivated:
+	case VREvent_TrackedDeviceDeactivated:
+	case VREvent_TrackedDeviceUpdated:
+	case VREvent_TrackedDeviceRoleChanged:
+		m_bindingsStale = m_panelDirty = true;
 		break;
 	default:
 		break;
@@ -329,9 +319,8 @@ void App::HandlePanelEvent( const VREvent_t &ev )
 		const int idx = m_buttons.HitTest( ev.data.mouse.x, kPanelH - ev.data.mouse.y );
 		if ( idx >= 0 )
 		{
-			const std::function<void()> fn = m_buttons.buttons()[idx].onClick; // copy: the click rebuilds the buttons
-			if ( fn )
-				fn();
+			const Button &button = m_buttons.buttons()[idx];
+			HandlePanelAction( button.action, button.value );
 			m_panelDirty = true;
 		}
 		break;
@@ -389,85 +378,85 @@ void App::Tick()
 	const bool haveInput = m_inputOk && m_actions.Update( in );
 	if ( haveInput && MoveAllowed() )
 	{
-		TrackedDevicePose_t poses[k_unMaxTrackedDeviceCount];
+		Tracked hmd, hands[2];
+		// Height/reset and idle input need no tracking IPC. A fresh pose is only needed for a grab or snap turn.
+		if ( in.drag[0] || in.drag[1] || in.turn[0] || in.turn[1] || in.snapLeft || in.snapRight )
 		{
+			TrackedDevicePose_t poses[k_unMaxTrackedDeviceCount];
 			VRSystem()->GetDeviceToAbsoluteTrackingPose( TrackingUniverseRawAndUncalibrated, 0.0f, poses, k_unMaxTrackedDeviceCount );
-			const Tracked hmd = ReadPose( k_unTrackedDeviceIndex_Hmd, poses );
-			const Tracked hands[2] = {
-				ReadPose( VRSystem()->GetTrackedDeviceIndexForControllerRole( TrackedControllerRole_LeftHand ), poses ),
-				ReadPose( VRSystem()->GetTrackedDeviceIndexForControllerRole( TrackedControllerRole_RightHand ), poses ),
-			};
-			const bool enabled[2] = { m_settings.leftHand, m_settings.rightHand };
-
-			// One hand at a time per gesture; a hand that already holds the world keeps it.
-			auto pick = [&]( const bool held[2], bool active0, bool active1 ) {
-				if ( active0 && held[0] )
-					return 0;
-				if ( active1 && held[1] )
-					return 1;
-				return held[0] ? 0 : held[1] ? 1 : -1;
-			};
-			// Double-press + hold (like OVR Advanced Settings): a plain press of a shared button never grabs the world.
-			bool dragHeld[2], turnHeld[2];
-			for ( int h = 0; h < 2; h++ )
-			{
-				const bool d = m_dragGate[h].Update( in.drag[h], now ), t = m_turnGate[h].Update( in.turn[h], now );
-				dragHeld[h] = ( m_settings.doublePress ? d : in.drag[h] ) && enabled[h];
-				turnHeld[h] = ( m_settings.doublePress ? t : in.turn[h] ) && enabled[h];
-				if ( m_settings.haptics && m_inputOk && ( ( dragHeld[h] && !m_dragWasOn[h] ) || ( turnHeld[h] && !m_turnWasOn[h] ) ) )
-					m_actions.Pulse( h == 0 ? Hand::Left : Hand::Right, 0.04f, 0.5f ); // "grabbed"
-				m_dragWasOn[h] = dragHeld[h];
-				m_turnWasOn[h] = turnHeld[h];
-			}
-			const int dragHand = pick( dragHeld, m_drag[0].Active(), m_drag[1].Active() );
-			const int turnHand = pick( turnHeld, m_turn[0].Active(), m_turn[1].Active() );
-			for ( int h = 0; h < 2; h++ )
-			{
-				m_drag[h].Update( h == dragHand, hands[h].valid, hands[h].pos, m_settings.dragMultiplier, m_settings.lockHeight, m_playspace );
-				m_turn[h].Update( h == turnHand && hmd.valid, hands[h].valid, hands[h].pos, hmd.pos, m_playspace );
-			}
-
-			if ( hmd.valid )
-			{
-				const double snap = m_settings.snapDegrees * kDegToRad;
-				if ( in.snapLeft )
-				{
-					m_playspace.RotateAbout( hmd.pos, -snap );
-					Pulse( true );
-				}
-				if ( in.snapRight )
-				{
-					m_playspace.RotateAbout( hmd.pos, snap );
-					Pulse( true );
-				}
-			}
-			// "Raise me" moves the world down.
-			if ( in.heightUp != in.heightDown )
-				m_playspace.Translate( { 0, ( in.heightUp ? -1.0 : 1.0 ) * m_settings.heightSpeed * dt, 0 } );
-
-			if ( in.reset )
-			{
-				if ( m_resetHeldSince < 0 )
-				{
-					m_resetHeldSince = now;
-					m_resetFired = false;
-				}
-				else if ( !m_resetFired && now - m_resetHeldSince >= kResetHoldSeconds )
-				{
-					m_resetFired = true;
-					ResetToOriginal();
-					Pulse( true );
-				}
-			}
-			else
-				m_resetHeldSince = -1;
+			hmd = ReadPose( k_unTrackedDeviceIndex_Hmd, poses );
+			hands[0] = ReadPose( VRSystem()->GetTrackedDeviceIndexForControllerRole( TrackedControllerRole_LeftHand ), poses );
+			hands[1] = ReadPose( VRSystem()->GetTrackedDeviceIndexForControllerRole( TrackedControllerRole_RightHand ), poses );
 		}
+		const bool enabled[2] = { m_settings.leftHand, m_settings.rightHand };
+
+		// One hand at a time per gesture; a hand that already holds the world keeps it.
+		auto pick = []( const bool held[2], bool active0, bool active1 ) {
+			if ( active0 && held[0] )
+				return 0;
+			if ( active1 && held[1] )
+				return 1;
+			return held[0] ? 0 : held[1] ? 1 : -1;
+		};
+		// Double-press + hold (like OVR Advanced Settings): a plain press of a shared button never grabs the world.
+		bool dragHeld[2], turnHeld[2];
+		for ( int h = 0; h < 2; h++ )
+		{
+			const bool d = m_dragGate[h].Update( in.drag[h], now ), t = m_turnGate[h].Update( in.turn[h], now );
+			dragHeld[h] = ( m_settings.doublePress ? d : in.drag[h] ) && enabled[h];
+			turnHeld[h] = ( m_settings.doublePress ? t : in.turn[h] ) && enabled[h];
+			if ( m_settings.haptics && m_inputOk && ( ( dragHeld[h] && !m_dragWasOn[h] ) || ( turnHeld[h] && !m_turnWasOn[h] ) ) )
+				m_actions.Pulse( h == 0 ? Hand::Left : Hand::Right, 0.04f, 0.5f ); // "grabbed"
+			m_dragWasOn[h] = dragHeld[h];
+			m_turnWasOn[h] = turnHeld[h];
+		}
+		const int dragHand = pick( dragHeld, m_drag[0].Active(), m_drag[1].Active() );
+		const int turnHand = pick( turnHeld, m_turn[0].Active(), m_turn[1].Active() );
+		for ( int h = 0; h < 2; h++ )
+		{
+			m_drag[h].Update( h == dragHand, hands[h].valid, hands[h].pos, m_settings.dragMultiplier, m_settings.lockHeight, m_playspace );
+			m_turn[h].Update( h == turnHand && hmd.valid, hands[h].valid, hands[h].pos, hmd.pos, m_playspace );
+		}
+
+		if ( hmd.valid )
+		{
+			const double snap = m_settings.snapDegrees * kDegToRad;
+			if ( in.snapLeft )
+			{
+				m_playspace.RotateAbout( hmd.pos, -snap );
+				Pulse( true );
+			}
+			if ( in.snapRight )
+			{
+				m_playspace.RotateAbout( hmd.pos, snap );
+				Pulse( true );
+			}
+		}
+		// "Raise me" moves the world down.
+		if ( in.heightUp != in.heightDown )
+			m_playspace.Translate( { 0, ( in.heightUp ? -1.0 : 1.0 ) * m_settings.heightSpeed * dt, 0 } );
+
+		if ( in.reset )
+		{
+			if ( m_resetHeldSince < 0 )
+			{
+				m_resetHeldSince = now;
+				m_resetFired = false;
+			}
+			else if ( !m_resetFired && now - m_resetHeldSince >= kResetHoldSeconds )
+			{
+				m_resetFired = true;
+				Rebase();
+				Pulse( true );
+			}
+		}
+		else
+			m_resetHeldSince = -1;
 	}
 
 	if ( MoveAllowed() )
 	{
 		ApplyIfChanged();
-		CheckLivePreview( now );
 		if ( m_playspace.Moved() && now >= m_nextExternalCheck )
 		{
 			m_nextExternalCheck = now + 0.25;
@@ -476,12 +465,14 @@ void App::Tick()
 				fprintf( stderr, "another program changed the chaperone working copy; pausing\n" );
 				Pause( false );
 			}
+			else
+				CheckLivePreview( now );
 		}
 	}
 
 	if ( m_inputOk && ( m_bindingsStale || now - m_lastBindingRefresh > 1.0 ) )
 		RefreshBindings( now );
-	if ( VROverlay()->IsActiveDashboardOverlay( m_panel ) && ( m_panelDirty || now - m_lastPanel > 0.25 ) )
+	if ( m_panelDirty && now >= m_panelRetryAt && VROverlay()->IsActiveDashboardOverlay( m_panel ) )
 		RedrawPanel();
 }
 
@@ -490,8 +481,7 @@ int App::Run()
 	while ( !s_quit )
 	{
 		Tick();
-		const bool busy = m_drag[0].Active() || m_drag[1].Active() || m_turn[0].Active() || m_turn[1].Active();
-		std::this_thread::sleep_for( std::chrono::milliseconds( busy ? 8 : 16 ) );
+		std::this_thread::sleep_for( std::chrono::milliseconds( GestureActive() ? 8 : 16 ) );
 	}
 	return 0;
 }
@@ -504,34 +494,43 @@ void App::ShowDashboardPanel()
 // ---------------------------------------------------------------------------------------------------------------------
 // Panel
 
-PanelCallbacks App::MakeCallbacks()
+void App::HandlePanelAction( PanelAction action, double value )
 {
-	PanelCallbacks cb;
-	cb.reset = [this] { ResetToOriginal(); };
-	cb.editBindings = [this] {
+	using A = PanelAction;
+	switch ( action )
+	{
+	case A::Reset:
+		Rebase();
+		return;
+	case A::EditBindings:
 		if ( !m_inputOk || !m_actions.OpenBindingEditor( kAppKey ) )
 			fprintf( stderr, "could not open the SteamVR binding editor\n" );
-	};
-	cb.raise = [this]( double meters ) {
+		return;
+	case A::Raise:
 		if ( MoveAllowed() )
-			m_playspace.Translate( { 0, -meters, 0 } ); // raising me moves the world down
-	};
-	cb.turn = [this]( double degrees ) {
+			m_playspace.Translate( { 0, -value, 0 } ); // raising me moves the world down
+		return;
+	case A::Turn:
+	{
 		if ( !MoveAllowed() )
 			return;
-		TrackedDevicePose_t poses[k_unMaxTrackedDeviceCount];
-		VRSystem()->GetDeviceToAbsoluteTrackingPose( TrackingUniverseRawAndUncalibrated, 0.0f, poses, k_unMaxTrackedDeviceCount );
+		TrackedDevicePose_t poses[1];
+		VRSystem()->GetDeviceToAbsoluteTrackingPose( TrackingUniverseRawAndUncalibrated, 0.0f, poses, 1 );
 		const Tracked hmd = ReadPose( k_unTrackedDeviceIndex_Hmd, poses );
 		if ( hmd.valid )
-			m_playspace.RotateAbout( hmd.pos, degrees * kDegToRad );
-	};
-	cb.settingsChanged = [this]( const Settings &s ) {
-		if ( s.largeChaperone != m_settings.largeChaperone || s.disableChaperone != m_settings.disableChaperone )
-			m_appliedAny = false; // write the new bounds / chaperone setting on the next tick
-		m_settings = s;
-		SaveSettings( s );
-	};
-	return cb;
+			m_playspace.RotateAbout( hmd.pos, value * kDegToRad );
+		return;
+	}
+	default:
+		break;
+	}
+	Settings s = m_settings;
+	if ( !ApplyPanelSetting( action, value, s ) )
+		return;
+	if ( s.largeChaperone != m_settings.largeChaperone || s.disableChaperone != m_settings.disableChaperone )
+		m_appliedAny = false; // write new bounds / chaperone setting on the next tick
+	m_settings = Clamped( s );
+	SaveSettings( m_settings );
 }
 
 // Re-reads what every action is bound to. Runs on its own (not only while the panel is visible) and as soon as SteamVR
@@ -554,7 +553,6 @@ void App::RefreshBindings( double now )
 void App::RedrawPanel()
 {
 	const double now = Now();
-	m_lastPanel = now;
 	m_panelDirty = false;
 	if ( m_bindings.empty() && m_inputOk )
 		RefreshBindings( now );
@@ -575,7 +573,7 @@ void App::RedrawPanel()
 	}
 
 	Canvas canvas( kPanelW, kPanelH );
-	DrawPanel( canvas, m_buttons, model, MakeCallbacks(), m_hover );
+	DrawPanel( canvas, m_buttons, model, m_hover );
 	std::vector<uint8_t> px( (size_t)kPanelW * kPanelH * 4 );
 	canvas.CopyRGBA( px.data() );
 	if ( px == m_lastPanelPixels ) // nothing changed: sending identical pixels would still make SteamVR reload the texture
@@ -586,6 +584,8 @@ void App::RedrawPanel()
 	if ( !ok )
 	{
 		fprintf( stderr, "panel upload failed: %s\n", err.c_str() );
+		m_panelDirty = true; // retry after the redraw interval even if no new UI event arrives
+		m_panelRetryAt = now + 0.25;
 		return;
 	}
 	if ( m_lastPanelPixels.empty() )
@@ -681,7 +681,7 @@ int App::SelfTest()
 			"the live universe moved (preview is active)" );
 	}
 
-	ResetToOriginal();
+	Rebase();
 	std::this_thread::sleep_for( std::chrono::milliseconds( 500 ) );
 	cs->GetWorkingStandingZeroPoseToRawTrackingPose( &workingStanding );
 	cs->GetWorkingSeatedZeroPoseToRawTrackingPose( &workingSeated );
