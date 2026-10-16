@@ -42,4 +42,5 @@ private:
 	uint64_t m_hand[2] = {};
 	int32_t m_priority = 0;
 	std::string m_lastGood[7]; // last non-empty binding text per action, see Bindings()
+	std::string m_defaults[7]; // what the shipped default binding file maps each action to, in Bindings()'s text format
 };
