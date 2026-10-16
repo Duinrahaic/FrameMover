@@ -1,3 +1,7 @@
+#include <pwd.h>
+#include <unistd.h>
+
+#include <cstdlib>
 #include <csignal>
 #include <cstdio>
 #include <cstring>
@@ -50,8 +54,35 @@ static int Screenshot( const char *path )
 	return c.WritePng( path ) ? 0 : 1;
 }
 
+// How the Frame launches things varies: Desktop Mode is a Plasma session nested in Game Mode (XDG_RUNTIME_DIR
+// is /run/user/<uid>/nested_plasma) and Flatpak launchers redirect XDG_CONFIG_HOME, while SteamVR's own processes see
+// the plain environment. OpenVR finds SteamVR through $XDG_CONFIG_HOME/openvr/openvrpaths.vrpath, so a redirected
+// XDG_CONFIG_HOME makes VR_Init fail even though SteamVR is running. Put the variables back to what SteamVR sees.
+static void NormalizeEnvironment()
+{
+	const char *home = getenv( "HOME" );
+	if ( !home || home[0] != '/' )
+	{
+		const passwd *pw = getpwuid( getuid() );
+		if ( pw && pw->pw_dir )
+			setenv( "HOME", pw->pw_dir, 1 );
+	}
+	const char *xdg = getenv( "XDG_CONFIG_HOME" );
+	home = getenv( "HOME" );
+	if ( xdg && *xdg && home )
+	{
+		const std::string registry = "/openvr/openvrpaths.vrpath";
+		if ( access( ( std::string( xdg ) + registry ).c_str(), R_OK ) != 0 && access( ( std::string( home ) + "/.config" + registry ).c_str(), R_OK ) == 0 )
+			unsetenv( "XDG_CONFIG_HOME" );
+	}
+	const std::string runtime = "/run/user/" + std::to_string( getuid() );
+	if ( access( runtime.c_str(), X_OK ) == 0 )
+		setenv( "XDG_RUNTIME_DIR", runtime.c_str(), 1 );
+}
+
 int main( int argc, char **argv )
 {
+	NormalizeEnvironment();
 	bool selftest = false, showDashboard = false;
 	for ( int i = 1; i < argc; i++ )
 	{
