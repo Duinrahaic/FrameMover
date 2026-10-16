@@ -7,20 +7,14 @@ runs on the Steam Frame itself** (native Linux ARM64, against the SteamVR that i
 * **Key binds are SteamVR Input bindings**: rebind them in SteamVR's own binding editor (button in the dashboard tab).
 * **Reset to original** puts back exactly the playspace / chaperone you had saved. The mover itself never commits anything to SteamVR's chaperone.
 
-## Scope: standalone only
-
-This runs on the SteamVR that lives *on the Frame* (standalone / on-device apps). When you stream a PC game, SteamVR runs
-on the PC and the Frame is only a client, so a program on the Frame cannot move that playspace; for that, run
-OVR Advanced Settings on the PC.
-
 ## How it works
 
 The mover edits SteamVR's *working copy* of the standing and seated zero poses (`IVRChaperoneSetup`) and shows it with
 `ShowWorkingSetPreview`, like OVR-AS. It never calls `CommitWorkingCopy`.
 
-* The virtual world moves; the chaperone stays where your real room is (checked on the device: the play area shifts opposite to the move).
+* The virtual world moves; the chaperone stays where your real room is (the play area shifts opposite to the move).
 * **Huge chaperone while moved** (panel toggle, on by default, `largeChaperone` in `config.ini`): while the world is moved, the working copy's play area is replaced by a 200 x 200 m square with four wall quads, so SteamVR's chaperone does not show up at the edge of your (or the 1 x 1 m placeholder) play area. It lives in the same working copy as the moved playspace: never committed, and Reset puts the saved size and walls back. Switch it off and the chaperone you saved is used as is. Note that the chaperone is also the only warning before a real wall.
-* **No chaperone** (panel toggle, off by default, `disableChaperone` in `config.ini`): while the world is moved, also sets SteamVR's `steamvr/disableChaperone` setting, for when the Frame still switches to passthrough outside the play area. That setting is written to `steamvr.vrsettings` immediately (SteamVR has no temporary settings), so the previous value is first saved to `~/.config/frame-mover/chaperone-setting.restore`; Reset, Quit and the next start put it back. Whether this setting also stops the Frame's passthrough is not verified on the headset.
+* **No chaperone** (panel toggle, off by default, `disableChaperone` in `config.ini`): while the world is moved, also sets SteamVR's `steamvr/disableChaperone` setting, for when the Frame still switches to passthrough outside the play area. That setting is written to `steamvr.vrsettings` immediately (SteamVR has no temporary settings), so the previous value is first saved to `~/.config/frame-mover/chaperone-setting.restore`; Reset, Quit and the next start put it back.
 * **Reset** = drop the preview and `RevertWorkingCopy`, which reloads `~/.config/openvr/config/chaperone_info.vrchap`. The mover never commits to that file. SteamVR does rewrite it on its own, in the background (it adds and prunes placeholder universes while the headset is not tracking, re-saves the seated origin after recenters, and its `cv` driver re-reads it every minute while tracking); the backups in `~/.local/share/frame-mover/backup/` show this.
 * Crash or kill: SteamVR notices the preview owner is gone and reloads the saved chaperone itself (`vrserver` log: "Live chaperone preview process ... isn't running anymore, reloading saved chaperone").
 * Extra safety net: a copy of `chaperone_info.vrchap` is kept in `~/.local/share/frame-mover/backup/` at every start and install (one per distinct content, newest 10).
@@ -73,21 +67,6 @@ Needs `libopenvr_api.so` and headers from `/opt/steamvr` (override with `-DOPENV
 Other commands: `--selftest` (moves the live playspace for about a second through SteamVR, verifies, restores, verifies; with the
 headset on this briefly shifts your world), `--screenshot FILE.png` (renders the panel, no SteamVR), `--show-dashboard`.
 
-## Verified on the device, and what was not
-
-Verified (SteamVR 2.18 on the Frame, headset idle):
-
-* Unit tests for the gesture math: the world point under the hand stays under the hand, the head stays fixed while turning, reset is exact, tracking loss does not jump, range limit.
-* `--selftest`: SteamVR holds the moved standing and seated origins, the live play area moves to exactly the position computed by hand, the reset drops the preview, no false "edited by another program" detection.
-* SteamVR accepts the action manifest and loads the default Frame binding; all seven actions resolve to Frame controller inputs.
-* Installer registers the app; the program runs as an overlay, exits cleanly on SIGTERM; `chaperone_info.vrchap` unchanged throughout.
-
-Not verified (the headset was not being worn, no controllers connected, so no tracking universe or controller input):
-
-* Grabbing and turning with real controllers, haptics, and the default button choices feeling right.
-* Exact restore against a *real* tracking universe. While the headset is not tracking SteamVR uses a placeholder universe (id 424242) that has no saved copy, so a reload of it yields zeros; `--selftest` detects this, says so, and asserts the exact restore only for a real universe. Run `--selftest` with the headset on to check it.
-* The dashboard panel on the headset (rendered and layout-checked as a PNG only), and the "Edit bindings in SteamVR" button.
-
 ## Known risk: leaving while the dashboard panel is open
 
 The panel is drawn with `SetOverlayRaw` (pixels through shared memory). Killing the mover while the dashboard tab was open once
@@ -98,15 +77,12 @@ again, switching the panel to Vulkan textures (`SetOverlayTexture`, as the Passt
 
 ## Playspace snapping back on its own
 
-Seen with QuestLHSync on: the floor height returns to the original, and the next grab puts you back where you were. What is known:
+Works with QuestLHSync on. In rare cases SteamVR still replaces the live playspace with the saved one and the floor height returns to the original. What is known:
 
-* The mover only wrote to SteamVR when its own offset changed, and never checked what SteamVR was really using. If SteamVR replaced the live
-  playspace with the saved one without an event, the mover still believed the move was active, which matches "the next grab brings me back".
-* `CheckLivePreview` now compares the zero pose SteamVR is really using (recovered from the headset's pose in raw space and in the standing
+* `CheckLivePreview` compares the zero pose SteamVR is really using (recovered from the headset's pose in raw space and in the standing
   universe) with the one the mover applied. On a mismatch while idle it logs one line (`live playspace differs from ours ...` with the three
   origins and whether the working copy is still ours), then re-applies (`re-applied the playspace SteamVR had dropped`). It stops trying for 30 s
   if SteamVR replaces it three times in 20 s.
 * What causes SteamVR to drop it is not established. Candidates seen in `vrserver.txt`: the `cv` driver's once-a-minute "Preserving worlds ..." followed by
   "Read chaperone JSON", relocalization (a new universe id appears in the saved file every few hours), recenter (system-button long press), and the
   Frame's own room-setup start/cancel (`ERoomSetupStep_RoomSetupFull`). A recenter or room-setup event is, by design, taken as a new original, which drops the move.
-* Not verified on the headset: the new check only works while the headset is tracking.
