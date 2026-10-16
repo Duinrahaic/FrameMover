@@ -1,0 +1,45 @@
+#pragma once
+#include <cstdint>
+#include <string>
+#include <utility>
+#include <vector>
+
+enum class Hand
+{
+	Left,
+	Right
+};
+
+// One frame of mover input, read through SteamVR Input so that every button is a rebindable action.
+struct InputFrame
+{
+	bool drag[2] = {};      // indexed by Hand: grab-and-move held with that hand
+	bool turn[2] = {};      // grab-and-turn held with that hand
+	bool snapLeft = false;  // rising edge this frame
+	bool snapRight = false; // rising edge this frame
+	bool heightUp = false;  // held
+	bool heightDown = false;
+	bool reset = false;     // held; the app decides how long it must be held
+};
+
+class Actions
+{
+public:
+	// `overrideGameInput` asks SteamVR to withhold inputs bound to our actions from the running game
+	// (needs the "Experimental overlay input overrides" developer setting).
+	bool Init( const std::string &manifestPath, bool overrideGameInput, std::string &error );
+	bool Update( InputFrame &out );
+	// Short buzz on one controller as feedback.
+	void Pulse( Hand hand, float seconds = 0.06f, float amplitude = 0.6f );
+	// (action label, comma separated list of what it is bound to), e.g. ("Grab and move", "Left Hand Bumper, ...").
+	std::vector<std::pair<std::string, std::string>> Bindings();
+	// Opens SteamVR's own binding editor for this app.
+	bool OpenBindingEditor( const std::string &appKey );
+
+private:
+	uint64_t m_set = 0;
+	uint64_t m_drag = 0, m_turn = 0, m_snapL = 0, m_snapR = 0, m_up = 0, m_down = 0, m_reset = 0, m_haptic = 0;
+	uint64_t m_hand[2] = {};
+	int32_t m_priority = 0;
+	std::string m_lastGood[7]; // last non-empty binding text per action, see Bindings()
+};

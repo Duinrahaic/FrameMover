@@ -1,0 +1,69 @@
+{
+  "default_bindings": [
+    {
+      "controller_type": "frame_controller",
+      "binding_url": "bindings/frame_controller.json"
+    }
+  ],
+  "actions": [
+    {
+      "name": "/actions/playspace/in/drag",
+      "requirement": "optional",
+      "type": "boolean"
+    },
+    {
+      "name": "/actions/playspace/in/turn",
+      "requirement": "optional",
+      "type": "boolean"
+    },
+    {
+      "name": "/actions/playspace/in/snapturnleft",
+      "requirement": "optional",
+      "type": "boolean"
+    },
+    {
+      "name": "/actions/playspace/in/snapturnright",
+      "requirement": "optional",
+      "type": "boolean"
+    },
+    {
+      "name": "/actions/playspace/in/heightup",
+      "requirement": "optional",
+      "type": "boolean"
+    },
+    {
+      "name": "/actions/playspace/in/heightdown",
+      "requirement": "optional",
+      "type": "boolean"
+    },
+    {
+      "name": "/actions/playspace/in/resetoriginal",
+      "requirement": "optional",
+      "type": "boolean"
+    },
+    {
+      "name": "/actions/playspace/out/haptic",
+      "type": "vibration"
+    }
+  ],
+  "action_sets": [
+    {
+      "name": "/actions/playspace",
+      "usage": "leftright"
+    }
+  ],
+  "localization": [
+    {
+      "language_tag": "en_US",
+      "/actions/playspace": "Frame Mover",
+      "/actions/playspace/in/drag": "Grab and move the playspace (hold, then move the hand)",
+      "/actions/playspace/in/turn": "Grab and turn the playspace around you (hold, then swing the hand around your head)",
+      "/actions/playspace/in/snapturnleft": "Snap turn the playspace left",
+      "/actions/playspace/in/snapturnright": "Snap turn the playspace right",
+      "/actions/playspace/in/heightup": "Raise yourself (hold)",
+      "/actions/playspace/in/heightdown": "Lower yourself (hold)",
+      "/actions/playspace/in/resetoriginal": "Reset to original playspace (hold 1.5 s)",
+      "/actions/playspace/out/haptic": "Haptic feedback"
+    }
+  ]
+}

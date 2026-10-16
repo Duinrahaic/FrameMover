@@ -1,0 +1,228 @@
+#include "chaperone.h"
+
+#include "config.h"
+
+#include <openvr.h>
+
+#include <cstdio>
+#include <fstream>
+#include <string>
+#include <sys/stat.h>
+#include <unistd.h>
+
+using namespace vr;
+
+namespace
+{
+Mat34 FromVr( const HmdMatrix34_t &s )
+{
+	Mat34 m;
+	for ( int r = 0; r < 3; r++ )
+		for ( int c = 0; c < 4; c++ )
+			m.m[r][c] = s.m[r][c];
+	return m;
+}
+
+HmdMatrix34_t ToVr( const Mat34 &s )
+{
+	HmdMatrix34_t m;
+	for ( int r = 0; r < 3; r++ )
+		for ( int c = 0; c < 4; c++ )
+			m.m[r][c] = (float)s.m[r][c];
+	return m;
+}
+
+// What the working copy reports after we wrote `want` (float precision on the wire).
+bool SameAsWritten( const HmdMatrix34_t &got, const Mat34 &want )
+{
+	const HmdMatrix34_t w = ToVr( want );
+	for ( int r = 0; r < 3; r++ )
+		for ( int c = 0; c < 4; c++ )
+			if ( std::fabs( got.m[r][c] - w.m[r][c] ) > 1e-4f * ( 1.0f + std::fabs( w.m[r][c] ) ) )
+				return false;
+	return true;
+}
+
+// Half the side of the huge play area, in meters. Far beyond anything a user can move the world, so SteamVR's
+// proximity warning never gets near a wall.
+constexpr float kHugeHalfSide = 100.0f;
+constexpr float kWallHeight = 2.43f; // what SteamVR's own room setup uses
+
+// Four walls of a square around the zero pose, wound the way SteamVR writes them (bottom, top, top, bottom per wall).
+std::vector<HmdQuad_t> HugeWalls()
+{
+	const float h = kHugeHalfSide;
+	const float xs[5] = { -h, h, h, -h, -h }, zs[5] = { h, h, -h, -h, h };
+	std::vector<HmdQuad_t> quads( 4 );
+	for ( int i = 0; i < 4; i++ )
+	{
+		const float ax = xs[i], az = zs[i], bx = xs[i + 1], bz = zs[i + 1];
+		quads[i].vCorners[0] = { { ax, 0, az } };
+		quads[i].vCorners[1] = { { ax, kWallHeight, az } };
+		quads[i].vCorners[2] = { { bx, kWallHeight, bz } };
+		quads[i].vCorners[3] = { { bx, 0, bz } };
+	}
+	return quads;
+}
+} // namespace
+
+namespace
+{
+constexpr const char *kSteamVrSection = "steamvr";
+constexpr const char *kDisableKey = "disableChaperone";
+
+// SteamVR keeps settings in steamvr.vrsettings the moment they are written, so a crash or a SteamVR shutdown while we
+// hold the override would leave the chaperone off for good. The value to put back is therefore saved on disk first.
+std::string RestoreFilePath()
+{
+	return ConfigDir() + "/chaperone-setting.restore";
+}
+
+void PutDisableSetting( const std::string &value )
+{
+	IVRSettings *st = VRSettings();
+	if ( !st )
+		return;
+	EVRSettingsError err;
+	if ( value == "absent" )
+		st->RemoveKeyInSection( kSteamVrSection, kDisableKey, &err );
+	else
+		st->SetBool( kSteamVrSection, kDisableKey, value == "1", &err );
+}
+} // namespace
+
+void Chaperone::RecoverSetting()
+{
+	std::string value;
+	{
+		std::ifstream in( RestoreFilePath() );
+		if ( !( in >> value ) )
+			return;
+	}
+	if ( value == "absent" || value == "0" || value == "1" )
+	{
+		PutDisableSetting( value );
+		fprintf( stderr, "put the SteamVR chaperone setting back after an earlier run did not exit cleanly\n" );
+	}
+	unlink( RestoreFilePath().c_str() );
+}
+
+void Chaperone::SetChaperoneDisabled( bool disabled )
+{
+	IVRSettings *st = VRSettings();
+	if ( !st )
+		return;
+	if ( disabled && !m_settingOverridden )
+	{
+		EVRSettingsError err;
+		const bool prev = st->GetBool( kSteamVrSection, kDisableKey, &err );
+		const std::string before = err != VRSettingsError_None ? "absent" : ( prev ? "1" : "0" );
+		mkdir( ConfigDir().c_str(), 0755 );
+		{
+			std::ofstream out( RestoreFilePath(), std::ios::trunc );
+			out << before << "\n";
+			if ( !out.good() )
+				return; // without a way back we do not touch the setting
+		}
+		m_settingBefore = before;
+		PutDisableSetting( "1" );
+		m_settingOverridden = true;
+	}
+	else if ( !disabled && m_settingOverridden )
+	{
+		PutDisableSetting( m_settingBefore );
+		unlink( RestoreFilePath().c_str() );
+		m_settingOverridden = false;
+	}
+}
+
+bool Chaperone::Capture( Mat34 &standing, Mat34 &seated )
+{
+	IVRChaperoneSetup *cs = VRChaperoneSetup();
+	if ( !cs )
+		return false;
+	if ( m_applied )
+		cs->HideWorkingSetPreview();
+	SetChaperoneDisabled( false );
+	m_applied = false;
+	cs->RevertWorkingCopy();
+	HmdMatrix34_t st, se;
+	if ( !cs->GetWorkingStandingZeroPoseToRawTrackingPose( &st ) || !cs->GetWorkingSeatedZeroPoseToRawTrackingPose( &se ) )
+		return false;
+	standing = FromVr( st );
+	seated = FromVr( se );
+	m_boundsOverridden = false;
+	uint32_t quads = 0;
+	m_savedQuads.clear();
+	if ( cs->GetWorkingCollisionBoundsInfo( nullptr, &quads ) && quads > 0 )
+	{
+		m_savedQuads.resize( quads );
+		if ( !cs->GetWorkingCollisionBoundsInfo( m_savedQuads.data(), &quads ) )
+			m_savedQuads.clear();
+		else
+			m_savedQuads.resize( quads );
+	}
+	m_savedAreaX = m_savedAreaZ = 0;
+	cs->GetWorkingPlayAreaSize( &m_savedAreaX, &m_savedAreaZ );
+	return true;
+}
+
+bool Chaperone::Apply( const Mat34 &standing, const Mat34 &seated, bool largeChaperone, bool disableChaperone )
+{
+	IVRChaperoneSetup *cs = VRChaperoneSetup();
+	if ( !cs )
+		return false;
+	const HmdMatrix34_t st = ToVr( standing ), se = ToVr( seated );
+	cs->SetWorkingStandingZeroPoseToRawTrackingPose( &st );
+	cs->SetWorkingSeatedZeroPoseToRawTrackingPose( &se );
+	if ( largeChaperone )
+	{
+		std::vector<HmdQuad_t> walls = HugeWalls();
+		cs->SetWorkingPlayAreaSize( 2 * kHugeHalfSide, 2 * kHugeHalfSide );
+		cs->SetWorkingCollisionBoundsInfo( walls.data(), (uint32_t)walls.size() );
+		m_boundsOverridden = true;
+	}
+	else if ( m_boundsOverridden )
+	{
+		cs->SetWorkingPlayAreaSize( m_savedAreaX, m_savedAreaZ );
+		cs->SetWorkingCollisionBoundsInfo( m_savedQuads.data(), (uint32_t)m_savedQuads.size() );
+		m_boundsOverridden = false;
+	}
+	SetChaperoneDisabled( disableChaperone );
+	cs->ShowWorkingSetPreview();
+	m_applied = true;
+	m_lastStanding = standing;
+	m_lastSeated = seated;
+	return true;
+}
+
+void Chaperone::Restore()
+{
+	IVRChaperoneSetup *cs = VRChaperoneSetup();
+	if ( !cs )
+		return;
+	cs->HideWorkingSetPreview();
+	SetChaperoneDisabled( false );
+	cs->RevertWorkingCopy();
+	if ( m_boundsOverridden && !m_savedQuads.empty() )
+	{
+		// A universe without a saved copy (the placeholder one) keeps whatever the working copy holds after a revert.
+		cs->SetWorkingPlayAreaSize( m_savedAreaX, m_savedAreaZ );
+		cs->SetWorkingCollisionBoundsInfo( m_savedQuads.data(), (uint32_t)m_savedQuads.size() );
+	}
+	m_applied = false;
+	m_boundsOverridden = false;
+}
+
+bool Chaperone::ModifiedByOthers() const
+{
+	if ( !m_applied )
+		return false;
+	IVRChaperoneSetup *cs = VRChaperoneSetup();
+	if ( !cs )
+		return false;
+	HmdMatrix34_t st, se;
+	if ( !cs->GetWorkingStandingZeroPoseToRawTrackingPose( &st ) || !cs->GetWorkingSeatedZeroPoseToRawTrackingPose( &se ) )
+		return false;
+	return !SameAsWritten( st, m_lastStanding ) || !SameAsWritten( se, m_lastSeated );
+}
