@@ -82,14 +82,6 @@ It needs FUSE or `--appimage-extract-and-run`, plus the same system libraries as
 from `/opt/steamvr`). Have SteamVR running so the app can be (un)registered; otherwise the files are still installed or removed and the
 output says what is left. Uninstall keeps `~/.config/frame-mover` and the chaperone backups.
 
-## Known risk: leaving while the dashboard panel is open
-
-The panel is drawn with `SetOverlayRaw` (pixels through shared memory). Killing the mover while the dashboard tab was open once
-made `vrcompositor` crash (SIGBUS in a `memcpy` on its render thread, seen in `journalctl`/`coredumpctl`), and SteamVR restarted
-itself. To reduce this the panel is now only re-uploaded when its pixels change, and on a normal exit (SIGTERM, dashboard Close)
-the overlay is hidden and destroyed before disconnecting. A `kill -9` or a crash of the mover can still do it. If it ever happens
-again, switching the panel to Vulkan textures (`SetOverlayTexture`, as the PassthroughOverlay project does) is the next step.
-
 ## Playspace snapping back on its own
 
 Works with QuestLHSync on. In rare cases SteamVR still replaces the live playspace with the saved one and the floor height returns to the original. What is known:
