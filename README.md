@@ -1,4 +1,4 @@
-# frame-mover
+# FrameMover
 
 An [OVR Advanced Settings](https://github.com/OpenVR-Advanced-Settings/OpenVR-AdvancedSettings)-style **playspace mover that
 runs on the Steam Frame itself** (native Linux ARM64, against the SteamVR that is installed on the headset).
