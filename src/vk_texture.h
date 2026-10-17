@@ -7,7 +7,6 @@
 
 #include <cstdint>
 #include <string>
-#include <vector>
 
 class VulkanContext
 {
@@ -51,8 +50,7 @@ private:
 	{
 		VkImage image = VK_NULL_HANDLE;
 		VkDeviceMemory memory = VK_NULL_HANDLE;
-		VkCommandBuffer cmd = VK_NULL_HANDLE;
-		VkFence fence = VK_NULL_HANDLE;
+		bool fresh = true;
 	};
 
 	bool Create( uint32_t w, uint32_t h, std::string &err );
@@ -60,10 +58,13 @@ private:
 
 	VulkanContext &m_ctx;
 	Slot m_slots[kSlots];
+	// Uploads complete before Update returns, so the entire image ring shares these.
+	VkCommandBuffer m_cmd = VK_NULL_HANDLE;
+	VkFence m_fence = VK_NULL_HANDLE;
+	bool m_pending = false; // A timed-out upload must finish before its staging buffer is reused.
 	VkBuffer m_staging = VK_NULL_HANDLE;
 	VkDeviceMemory m_stagingMemory = VK_NULL_HANDLE;
 	void *m_stagingMapped = nullptr;
 	uint32_t m_width = 0, m_height = 0;
 	int m_next = 0;
-	bool m_fresh[kSlots] = {};
 };

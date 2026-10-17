@@ -1,35 +1,39 @@
 #include "vk_texture.h"
 
 #include <cstring>
+#include <vector>
 
 namespace
 {
 constexpr VkFormat kFormat = VK_FORMAT_R8G8B8A8_UNORM;
 
-// Splits OpenVR's space separated extension list.
-std::vector<std::string> SplitExtensions( const std::string &s )
+// Split OpenVR's buffer in place; extension names need no separate string allocations.
+std::vector<const char *> SplitExtensions( std::string &s )
 {
-	std::vector<std::string> out;
-	std::string cur;
-	for ( char c : s )
+	std::vector<const char *> out;
+	bool start = true;
+	for ( char &c : s )
 	{
-		if ( c == ' ' )
+		if ( c == ' ' || c == '\0' )
 		{
-			if ( !cur.empty() )
-				out.push_back( cur );
-			cur.clear();
+			c = '\0';
+			start = true;
 		}
-		else if ( c )
-			cur += c;
+		else if ( start )
+		{
+			out.push_back( &c );
+			start = false;
+		}
 	}
-	if ( !cur.empty() )
-		out.push_back( cur );
 	return out;
 }
 
-std::string VkErr( const char *what, VkResult r )
+bool Check( VkResult r, const char *what, std::string &err )
 {
-	return std::string( what ) + " failed (VkResult " + std::to_string( (int)r ) + ")";
+	if ( r == VK_SUCCESS )
+		return true;
+	err = std::string( what ) + " failed (VkResult " + std::to_string( (int)r ) + ")";
+	return false;
 }
 } // namespace
 
@@ -62,35 +66,28 @@ bool VulkanContext::FindMemoryType( uint32_t typeBits, VkMemoryPropertyFlags fla
 bool VulkanContext::Init( std::string &err )
 {
 	vr::IVRCompositor *compositor = vr::VRCompositor();
-	std::vector<std::string> instExt, devExt;
+	std::string instExt, devExt;
 	if ( compositor )
 	{
 		uint32_t n = compositor->GetVulkanInstanceExtensionsRequired( nullptr, 0 );
 		if ( n > 0 )
 		{
-			std::string buf( n, '\0' );
-			compositor->GetVulkanInstanceExtensionsRequired( buf.data(), n );
-			instExt = SplitExtensions( buf );
+			instExt.resize( n );
+			compositor->GetVulkanInstanceExtensionsRequired( instExt.data(), n );
 		}
 	}
 
-	std::vector<const char *> instNames;
-	for ( const std::string &e : instExt )
-		instNames.push_back( e.c_str() );
+	const auto instNames = SplitExtensions( instExt );
 
 	VkApplicationInfo app = { VK_STRUCTURE_TYPE_APPLICATION_INFO };
-	app.pApplicationName = "passthrough-overlay";
+	app.pApplicationName = "FrameMover";
 	app.apiVersion = VK_API_VERSION_1_1;
 	VkInstanceCreateInfo ici = { VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO };
 	ici.pApplicationInfo = &app;
 	ici.enabledExtensionCount = (uint32_t)instNames.size();
 	ici.ppEnabledExtensionNames = instNames.data();
-	VkResult r = vkCreateInstance( &ici, nullptr, &instance );
-	if ( r != VK_SUCCESS )
-	{
-		err = VkErr( "vkCreateInstance", r );
+	if ( !Check( vkCreateInstance( &ici, nullptr, &instance ), "vkCreateInstance", err ) )
 		return false;
-	}
 
 	uint32_t count = 0;
 	vkEnumeratePhysicalDevices( instance, &count, nullptr );
@@ -117,9 +114,8 @@ bool VulkanContext::Init( std::string &err )
 		uint32_t n = compositor->GetVulkanDeviceExtensionsRequired( (VkPhysicalDevice_T *)physical, nullptr, 0 );
 		if ( n > 0 )
 		{
-			std::string buf( n, '\0' );
-			compositor->GetVulkanDeviceExtensionsRequired( (VkPhysicalDevice_T *)physical, buf.data(), n );
-			devExt = SplitExtensions( buf );
+			devExt.resize( n );
+			compositor->GetVulkanDeviceExtensionsRequired( (VkPhysicalDevice_T *)physical, devExt.data(), n );
 		}
 	}
 	// Only enable what the driver actually offers.
@@ -128,11 +124,11 @@ bool VulkanContext::Init( std::string &err )
 	std::vector<VkExtensionProperties> available( extCount );
 	vkEnumerateDeviceExtensionProperties( physical, nullptr, &extCount, available.data() );
 	std::vector<const char *> devNames;
-	for ( const std::string &e : devExt )
+	for ( const char *e : SplitExtensions( devExt ) )
 		for ( const VkExtensionProperties &p : available )
-			if ( e == p.extensionName )
+			if ( strcmp( e, p.extensionName ) == 0 )
 			{
-				devNames.push_back( e.c_str() );
+				devNames.push_back( e );
 				break;
 			}
 
@@ -164,24 +160,14 @@ bool VulkanContext::Init( std::string &err )
 	dci.pQueueCreateInfos = &qci;
 	dci.enabledExtensionCount = (uint32_t)devNames.size();
 	dci.ppEnabledExtensionNames = devNames.data();
-	r = vkCreateDevice( physical, &dci, nullptr, &device );
-	if ( r != VK_SUCCESS )
-	{
-		err = VkErr( "vkCreateDevice", r );
+	if ( !Check( vkCreateDevice( physical, &dci, nullptr, &device ), "vkCreateDevice", err ) )
 		return false;
-	}
 	vkGetDeviceQueue( device, queueFamily, 0, &queue );
 
 	VkCommandPoolCreateInfo pci = { VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO };
 	pci.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
 	pci.queueFamilyIndex = queueFamily;
-	r = vkCreateCommandPool( device, &pci, nullptr, &pool );
-	if ( r != VK_SUCCESS )
-	{
-		err = VkErr( "vkCreateCommandPool", r );
-		return false;
-	}
-	return true;
+	return Check( vkCreateCommandPool( device, &pci, nullptr, &pool ), "vkCreateCommandPool", err );
 }
 
 OverlayTexture::~OverlayTexture()
@@ -195,12 +181,15 @@ void OverlayTexture::Destroy()
 	if ( !dev )
 		return;
 	vkDeviceWaitIdle( dev );
+	if ( m_fence )
+		vkDestroyFence( dev, m_fence, nullptr );
+	if ( m_cmd )
+		vkFreeCommandBuffers( dev, m_ctx.pool, 1, &m_cmd );
+	m_fence = VK_NULL_HANDLE;
+	m_cmd = VK_NULL_HANDLE;
+	m_pending = false;
 	for ( Slot &s : m_slots )
 	{
-		if ( s.fence )
-			vkDestroyFence( dev, s.fence, nullptr );
-		if ( s.cmd )
-			vkFreeCommandBuffers( dev, m_ctx.pool, 1, &s.cmd );
 		if ( s.image )
 			vkDestroyImage( dev, s.image, nullptr );
 		if ( s.memory )
@@ -216,8 +205,6 @@ void OverlayTexture::Destroy()
 	m_stagingMapped = nullptr;
 	m_staging = VK_NULL_HANDLE;
 	m_stagingMemory = VK_NULL_HANDLE;
-	for ( bool &f : m_fresh )
-		f = true;
 	m_width = m_height = 0;
 	m_next = 0;
 }
@@ -231,12 +218,8 @@ bool OverlayTexture::Create( uint32_t w, uint32_t h, std::string &err )
 	bci.size = bytes;
 	bci.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
 	bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-	VkResult r = vkCreateBuffer( dev, &bci, nullptr, &m_staging );
-	if ( r != VK_SUCCESS )
-	{
-		err = VkErr( "vkCreateBuffer", r );
+	if ( !Check( vkCreateBuffer( dev, &bci, nullptr, &m_staging ), "vkCreateBuffer", err ) )
 		return false;
-	}
 	VkMemoryRequirements req;
 	vkGetBufferMemoryRequirements( dev, m_staging, &req );
 	VkMemoryAllocateInfo mai = { VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO };
@@ -246,13 +229,19 @@ bool OverlayTexture::Create( uint32_t w, uint32_t h, std::string &err )
 		err = "no host-visible coherent memory type";
 		return false;
 	}
-	if ( ( r = vkAllocateMemory( dev, &mai, nullptr, &m_stagingMemory ) ) != VK_SUCCESS ||
-		( r = vkBindBufferMemory( dev, m_staging, m_stagingMemory, 0 ) ) != VK_SUCCESS ||
-		( r = vkMapMemory( dev, m_stagingMemory, 0, VK_WHOLE_SIZE, 0, &m_stagingMapped ) ) != VK_SUCCESS )
-	{
-		err = VkErr( "staging buffer setup", r );
+	if ( !Check( vkAllocateMemory( dev, &mai, nullptr, &m_stagingMemory ), "staging buffer allocation", err ) ||
+		!Check( vkBindBufferMemory( dev, m_staging, m_stagingMemory, 0 ), "staging buffer binding", err ) ||
+		!Check( vkMapMemory( dev, m_stagingMemory, 0, VK_WHOLE_SIZE, 0, &m_stagingMapped ), "staging buffer mapping", err ) )
 		return false;
-	}
+
+	VkCommandBufferAllocateInfo cai = { VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO };
+	cai.commandPool = m_ctx.pool;
+	cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+	cai.commandBufferCount = 1;
+	VkFenceCreateInfo fci = { VK_STRUCTURE_TYPE_FENCE_CREATE_INFO };
+	if ( !Check( vkAllocateCommandBuffers( dev, &cai, &m_cmd ), "vkAllocateCommandBuffers", err ) ||
+		!Check( vkCreateFence( dev, &fci, nullptr, &m_fence ), "vkCreateFence", err ) )
+		return false;
 
 	for ( Slot &s : m_slots )
 	{
@@ -266,11 +255,8 @@ bool OverlayTexture::Create( uint32_t w, uint32_t h, std::string &err )
 		ici.tiling = VK_IMAGE_TILING_OPTIMAL;
 		ici.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
 		ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-		if ( ( r = vkCreateImage( dev, &ici, nullptr, &s.image ) ) != VK_SUCCESS )
-		{
-			err = VkErr( "vkCreateImage", r );
+		if ( !Check( vkCreateImage( dev, &ici, nullptr, &s.image ), "vkCreateImage", err ) )
 			return false;
-		}
 		vkGetImageMemoryRequirements( dev, s.image, &req );
 		mai.allocationSize = req.size;
 		if ( !m_ctx.FindMemoryType( req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, mai.memoryTypeIndex ) )
@@ -278,28 +264,12 @@ bool OverlayTexture::Create( uint32_t w, uint32_t h, std::string &err )
 			err = "no device-local memory type";
 			return false;
 		}
-		if ( ( r = vkAllocateMemory( dev, &mai, nullptr, &s.memory ) ) != VK_SUCCESS ||
-			( r = vkBindImageMemory( dev, s.image, s.memory, 0 ) ) != VK_SUCCESS )
-		{
-			err = VkErr( "image memory", r );
+		if ( !Check( vkAllocateMemory( dev, &mai, nullptr, &s.memory ), "image memory allocation", err ) ||
+			!Check( vkBindImageMemory( dev, s.image, s.memory, 0 ), "image memory binding", err ) )
 			return false;
-		}
-		VkCommandBufferAllocateInfo cai = { VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO };
-		cai.commandPool = m_ctx.pool;
-		cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-		cai.commandBufferCount = 1;
-		VkFenceCreateInfo fci = { VK_STRUCTURE_TYPE_FENCE_CREATE_INFO };
-		if ( ( r = vkAllocateCommandBuffers( dev, &cai, &s.cmd ) ) != VK_SUCCESS ||
-			( r = vkCreateFence( dev, &fci, nullptr, &s.fence ) ) != VK_SUCCESS )
-		{
-			err = VkErr( "command buffer/fence", r );
-			return false;
-		}
 	}
 	m_width = w;
 	m_height = h;
-	for ( bool &f : m_fresh )
-		f = true;
 	return true;
 }
 
@@ -321,31 +291,35 @@ bool OverlayTexture::Update( vr::VROverlayHandle_t overlay, const uint8_t *rgba,
 	}
 
 	VkDevice dev = m_ctx.device;
-	int index = m_next;
-	Slot &s = m_slots[index];
+	if ( m_pending && !Check( vkWaitForFences( dev, 1, &m_fence, VK_TRUE, 1000000000ull ), "vkWaitForFences", err ) )
+		return false;
+	m_pending = false;
+	Slot &s = m_slots[m_next];
 	m_next = ( m_next + 1 ) % kSlots;
 
 	memcpy( m_stagingMapped, rgba, (size_t)w * h * 4 );
 
-	vkResetCommandBuffer( s.cmd, 0 );
+	if ( !Check( vkResetCommandBuffer( m_cmd, 0 ), "vkResetCommandBuffer", err ) )
+		return false;
 	VkCommandBufferBeginInfo begin = { VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
 	begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-	vkBeginCommandBuffer( s.cmd, &begin );
+	if ( !Check( vkBeginCommandBuffer( m_cmd, &begin ), "vkBeginCommandBuffer", err ) )
+		return false;
 
 	VkImageMemoryBarrier toDst = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
-	toDst.srcAccessMask = m_fresh[index] ? 0 : VK_ACCESS_TRANSFER_READ_BIT;
+	toDst.srcAccessMask = s.fresh ? 0 : VK_ACCESS_TRANSFER_READ_BIT;
 	toDst.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-	toDst.oldLayout = m_fresh[index] ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+	toDst.oldLayout = s.fresh ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
 	toDst.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
 	toDst.srcQueueFamilyIndex = toDst.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 	toDst.image = s.image;
 	toDst.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
-	vkCmdPipelineBarrier( s.cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toDst );
+	vkCmdPipelineBarrier( m_cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toDst );
 
 	VkBufferImageCopy copy = {};
 	copy.imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
 	copy.imageExtent = { w, h, 1 };
-	vkCmdCopyBufferToImage( s.cmd, m_staging, s.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy );
+	vkCmdCopyBufferToImage( m_cmd, m_staging, s.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy );
 
 	// The compositor reads overlay textures as a transfer source.
 	VkImageMemoryBarrier toSrc = toDst;
@@ -353,26 +327,22 @@ bool OverlayTexture::Update( vr::VROverlayHandle_t overlay, const uint8_t *rgba,
 	toSrc.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
 	toSrc.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
 	toSrc.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-	vkCmdPipelineBarrier( s.cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toSrc );
-	vkEndCommandBuffer( s.cmd );
+	vkCmdPipelineBarrier( m_cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toSrc );
+	if ( !Check( vkEndCommandBuffer( m_cmd ), "vkEndCommandBuffer", err ) )
+		return false;
 
-	vkResetFences( dev, 1, &s.fence );
+	if ( !Check( vkResetFences( dev, 1, &m_fence ), "vkResetFences", err ) )
+		return false;
 	VkSubmitInfo submit = { VK_STRUCTURE_TYPE_SUBMIT_INFO };
 	submit.commandBufferCount = 1;
-	submit.pCommandBuffers = &s.cmd;
-	VkResult r = vkQueueSubmit( m_ctx.queue, 1, &submit, s.fence );
-	if ( r != VK_SUCCESS )
-	{
-		err = VkErr( "vkQueueSubmit", r );
+	submit.pCommandBuffers = &m_cmd;
+	if ( !Check( vkQueueSubmit( m_ctx.queue, 1, &submit, m_fence ), "vkQueueSubmit", err ) )
 		return false;
-	}
-	r = vkWaitForFences( dev, 1, &s.fence, VK_TRUE, 1000000000ull );
-	if ( r != VK_SUCCESS )
-	{
-		err = VkErr( "vkWaitForFences", r );
+	m_pending = true;
+	if ( !Check( vkWaitForFences( dev, 1, &m_fence, VK_TRUE, 1000000000ull ), "vkWaitForFences", err ) )
 		return false;
-	}
-	m_fresh[index] = false;
+	m_pending = false;
+	s.fresh = false;
 
 	vr::VRVulkanTextureData_t data = {};
 	data.m_nImage = (uint64_t)s.image;

@@ -1,81 +1,25 @@
 #include "actions.h"
+#include "bindings.h"
+#include "files.h"
 
 #include <openvr.h>
 
 #include "app.h"
 
 #include <algorithm>
-#include <cstdio>
-#include <fstream>
-#include <iterator>
-#include <regex>
-#include <cstring>
 
 using namespace vr;
+using namespace bindings;
 
 namespace
 {
 constexpr const char *kSet = "/actions/playspace";
 
-bool Digital( VRActionHandle_t action, VRInputValueHandle_t restrictTo, bool &state, bool &changed )
+bool Digital( IVRInput *input, VRActionHandle_t action, VRInputValueHandle_t restrictTo, bool rising = false )
 {
 	InputDigitalActionData_t d = {};
-	if ( VRInput()->GetDigitalActionData( action, &d, sizeof d, restrictTo ) != VRInputError_None || !d.bActive )
-	{
-		state = changed = false;
-		return false;
-	}
-	state = d.bState;
-	changed = d.bChanged;
-	return true;
-}
-
-// "/user/hand/left" -> "Left Hand", "/input/dpad_left" -> "Dpad Left"
-std::string Pretty( std::string s )
-{
-	for ( const char *prefix : { "/user/hand/", "/user/", "/input/" } )
-		if ( s.rfind( prefix, 0 ) == 0 )
-		{
-			const bool hand = std::string( prefix ) == "/user/hand/";
-			s = s.substr( strlen( prefix ) );
-			for ( char &c : s )
-				if ( c == '_' || c == '/' )
-					c = ' ';
-			bool start = true;
-			for ( char &c : s )
-			{
-				if ( start && c >= 'a' && c <= 'z' )
-					c = (char)( c - 'a' + 'A' );
-				start = c == ' ';
-			}
-			return hand ? s + " Hand" : s;
-		}
-	return s;
-}
-
-// Reads the shipped default binding file and writes, per action (same order as Actions::Bindings), the text Bindings() would give
-// for it, e.g. "Left Hand Bumper, Right Hand Bumper". Each source lists its action ("output") before its "path".
-void LoadDefaultBindings( const std::string &file, std::string ( &out )[7] )
-{
-	static const char *const actions[7] = { "drag", "turn", "snapturnleft", "snapturnright", "heightup", "heightdown", "resetoriginal" };
-	std::ifstream in( file );
-	const std::string text( ( std::istreambuf_iterator<char>( in ) ), std::istreambuf_iterator<char>() );
-	const std::regex pair( "\"(output|path)\"\\s*:\\s*\"([^\"]*)\"" );
-	std::string pending;
-	for ( std::sregex_iterator it( text.begin(), text.end(), pair ), end; it != end; ++it )
-	{
-		const std::string key = ( *it )[1], value = ( *it )[2];
-		if ( key == "output" )
-		{
-			pending = value;
-			continue;
-		}
-		const size_t split = value.find( "/input/" );
-		for ( int i = 0; i < 7 && split != std::string::npos; i++ )
-			if ( pending == std::string( kSet ) + "/in/" + actions[i] )
-				out[i] += ( out[i].empty() ? "" : ", " ) + Pretty( value.substr( 0, split ) ) + " " + Pretty( value.substr( split ) );
-		pending.clear();
-	}
+	return input->GetDigitalActionData( action, &d, sizeof d, restrictTo ) == VRInputError_None &&
+		d.bActive && d.bState && ( !rising || d.bChanged );
 }
 
 // SteamVR keeps a user's saved binding configuration under "<controller type>_<SteamVR's app id>_..._steamvrinput" in the app's
@@ -108,27 +52,12 @@ bool Actions::Init( const std::string &manifestPath, bool overrideGameInput, std
 		error = "SetActionManifestPath(" + manifestPath + ") failed, error " + std::to_string( (int)e );
 		return false;
 	}
-	struct Item
+	for ( int i = 0; i <= Haptic; i++ )
 	{
-		const char *path;
-		uint64_t *handle;
-	};
-	const Item items[] = {
-		{ "/actions/playspace/in/drag", &m_drag },
-		{ "/actions/playspace/in/turn", &m_turn },
-		{ "/actions/playspace/in/snapturnleft", &m_snapL },
-		{ "/actions/playspace/in/snapturnright", &m_snapR },
-		{ "/actions/playspace/in/heightup", &m_up },
-		{ "/actions/playspace/in/heightdown", &m_down },
-		{ "/actions/playspace/in/resetoriginal", &m_reset },
-		{ "/actions/playspace/out/haptic", &m_haptic },
-	};
-	for ( const Item &it : items )
-	{
-		e = in->GetActionHandle( it.path, it.handle );
+		e = in->GetActionHandle( kActions[i].path, &m_action[i] );
 		if ( e != VRInputError_None )
 		{
-			error = std::string( "GetActionHandle(" ) + it.path + ") failed, error " + std::to_string( (int)e );
+			error = std::string( "GetActionHandle(" ) + kActions[i].path + ") failed, error " + std::to_string( (int)e );
 			return false;
 		}
 	}
@@ -144,68 +73,52 @@ bool Actions::Init( const std::string &manifestPath, bool overrideGameInput, std
 		return false;
 	}
 	m_priority = overrideGameInput ? k_nActionSetOverlayGlobalPriorityMin : 0;
-	LoadDefaultBindings( manifestPath.substr( 0, manifestPath.rfind( '/' ) + 1 ) + "bindings/frame_controller.json", m_defaults );
+	std::string defaults;
+	if ( files::ReadFile( manifestPath.substr( 0, manifestPath.rfind( '/' ) + 1 ) + "bindings/frame_controller.json", defaults ) )
+		LoadDefaults( defaults, m_defaults );
 	return true;
 }
 
 bool Actions::Update( InputFrame &out )
 {
 	out = InputFrame();
+	IVRInput *input = VRInput();
 	VRActiveActionSet_t active = {};
 	active.ulActionSet = m_set;
 	active.ulRestrictedToDevice = k_ulInvalidInputValueHandle;
 	active.nPriority = m_priority;
-	if ( VRInput()->UpdateActionState( &active, sizeof active, 1 ) != VRInputError_None )
+	if ( input->UpdateActionState( &active, sizeof active, 1 ) != VRInputError_None )
 		return false;
 
-	bool changed;
 	for ( int h = 0; h < 2; h++ )
 	{
-		Digital( m_drag, m_hand[h], out.drag[h], changed );
-		Digital( m_turn, m_hand[h], out.turn[h], changed );
+		out.drag[h] = Digital( input, m_action[Drag], m_hand[h] );
+		out.turn[h] = Digital( input, m_action[Turn], m_hand[h] );
 	}
-	bool state;
-	if ( Digital( m_snapL, k_ulInvalidInputValueHandle, state, changed ) )
-		out.snapLeft = state && changed;
-	if ( Digital( m_snapR, k_ulInvalidInputValueHandle, state, changed ) )
-		out.snapRight = state && changed;
-	Digital( m_up, k_ulInvalidInputValueHandle, out.heightUp, changed );
-	Digital( m_down, k_ulInvalidInputValueHandle, out.heightDown, changed );
-	Digital( m_reset, k_ulInvalidInputValueHandle, out.reset, changed );
+	out.snapLeft = Digital( input, m_action[SnapLeft], k_ulInvalidInputValueHandle, true );
+	out.snapRight = Digital( input, m_action[SnapRight], k_ulInvalidInputValueHandle, true );
+	out.heightUp = Digital( input, m_action[Up], k_ulInvalidInputValueHandle );
+	out.heightDown = Digital( input, m_action[Down], k_ulInvalidInputValueHandle );
+	out.reset = Digital( input, m_action[Reset], k_ulInvalidInputValueHandle );
 	return true;
 }
 
 void Actions::Pulse( Hand hand, float seconds, float amplitude )
 {
-	VRInput()->TriggerHapticVibrationAction( m_haptic, 0.0f, seconds, 150.0f, amplitude, m_hand[(int)hand] );
+	VRInput()->TriggerHapticVibrationAction( m_action[Haptic], 0.0f, seconds, 150.0f, amplitude, m_hand[(int)hand] );
 }
 
 std::vector<std::pair<std::string, std::string>> Actions::Bindings()
 {
-	struct Item
-	{
-		const char *label;
-		uint64_t handle;
-	};
-	const Item items[] = {
-		{ "Grab and move", m_drag },
-		{ "Grab and turn", m_turn },
-		{ "Snap turn left", m_snapL },
-		{ "Snap turn right", m_snapR },
-		{ "Raise me", m_up },
-		{ "Lower me", m_down },
-		{ "Reset to original", m_reset },
-	};
-
 	std::vector<std::pair<std::string, std::string>> out;
-	int index = 0;
+	out.reserve( Haptic );
+	IVRInput *input = VRInput();
 	int custom = -1; // lazily: does the user have saved bindings of their own
-	for ( const Item &it : items )
+	for ( int i = 0; i < Haptic; i++ )
 	{
-		const int i = index++;
 		VRInputValueHandle_t origins[16] = {};
 		std::string names;
-		const EVRInputError err = VRInput()->GetActionOrigins( m_set, it.handle, origins, 16 );
+		const EVRInputError err = input->GetActionOrigins( m_set, m_action[i], origins, 16 );
 		if ( err == VRInputError_None )
 		{
 			for ( VRInputValueHandle_t o : origins )
@@ -213,12 +126,12 @@ std::vector<std::pair<std::string, std::string>> Actions::Bindings()
 				if ( o == k_ulInvalidInputValueHandle )
 					continue;
 				char buf[256] = {};
-				if ( VRInput()->GetOriginLocalizedName( o, buf, sizeof buf, VRInputString_All ) == VRInputError_None && buf[0] )
+				if ( input->GetOriginLocalizedName( o, buf, sizeof buf, VRInputString_All ) == VRInputError_None && buf[0] )
 				{
 					std::string n = buf;
 					for ( size_t p; ( p = n.find( " Frame Controller" ) ) != std::string::npos; ) // "Left Hand Frame Controller Bumper" -> "Left Hand Bumper"
 						n.erase( p, 17 );
-					names += ( names.empty() ? "" : ", " ) + n;
+					AppendName( names, n );
 				}
 			}
 			if ( names.empty() )
@@ -227,7 +140,7 @@ std::vector<std::pair<std::string, std::string>> Actions::Bindings()
 				// exist. The binding description does not depend on that, so read it instead.
 				InputBindingInfo_t info[16] = {};
 				uint32_t count = 0;
-				if ( VRInput()->GetActionBindingInfo( it.handle, info, sizeof( InputBindingInfo_t ), 16, &count ) == VRInputError_None )
+				if ( input->GetActionBindingInfo( m_action[i], info, sizeof( InputBindingInfo_t ), 16, &count ) == VRInputError_None )
 				{
 					std::vector<std::string> seen;
 					for ( uint32_t k = 0; k < count && k < 16; k++ )
@@ -236,7 +149,7 @@ std::vector<std::pair<std::string, std::string>> Actions::Bindings()
 						if ( std::find( seen.begin(), seen.end(), n ) != seen.end() )
 							continue;
 						seen.push_back( n );
-						names += ( names.empty() ? "" : ", " ) + n;
+						AppendName( names, n );
 					}
 				}
 			}
@@ -256,9 +169,9 @@ std::vector<std::pair<std::string, std::string>> Actions::Bindings()
 			}
 		}
 		if ( err != VRInputError_None )
-			out.emplace_back( it.label, "unavailable (SteamVR Input error " + std::to_string( (int)err ) + ")" );
+			out.emplace_back( kActions[i].label, "unavailable (SteamVR Input error " + std::to_string( (int)err ) + ")" );
 		else
-			out.emplace_back( it.label, names.empty() ? "not bound" : names );
+			out.emplace_back( kActions[i].label, names.empty() ? "not bound" : names );
 	}
 	return out;
 }

@@ -1,7 +1,7 @@
 #!/bin/sh
 # Builds the installer AppImage for the Steam Frame (Linux aarch64): ./packaging/appimage/build.sh [OUTPUT]
-# Must run on an aarch64 machine (the Frame itself works): the program links against the aarch64 SteamVR
-# runtime, so it cannot be cross-built from an x86-64 host. Needs cmake, a C++ toolchain, the build dependencies
+# This installer script runs natively on aarch64 (the Frame itself works) and links against its SteamVR
+# runtime. Cross-building the program separately needs a matching SDK/toolchain. Needs cmake, the build dependencies
 # from the README, and network access the first time (downloads appimagetool into the build directory unless
 # it is already on PATH).
 set -eu
@@ -17,7 +17,7 @@ BUILD=${BUILD_DIR:-$ROOT/build}
 OUT=${1:-$BUILD/FrameMover-installer-$ARCH.AppImage}
 APPDIR=$BUILD/AppDir
 
-cmake -S "$ROOT" -B "$BUILD" >/dev/null
+cmake -S "$ROOT" -B "$BUILD" -DCMAKE_BUILD_TYPE="${BUILD_TYPE:-MinSizeRel}" -DBUILD_TESTING=OFF >/dev/null
 cmake --build "$BUILD" -j --target frame-mover
 
 # The program finds its data directory at <exe>/../data, so usr/bin and usr/data sit side by side.

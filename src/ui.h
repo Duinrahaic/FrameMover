@@ -1,9 +1,10 @@
 #pragma once
+#include "panel_action.h"
 #include <cairo.h>
 
 #include <cstdint>
-#include <functional>
 #include <string>
+#include <utility>
 #include <vector>
 
 // Minimal software canvas on a cairo ARGB32 surface.
@@ -39,7 +40,8 @@ struct Button
 	double x, y, w, h;
 	std::string label;
 	bool active;
-	std::function<void()> onClick;
+	PanelAction action;
+	double value = 0;
 };
 
 class ButtonPanel

@@ -12,7 +12,6 @@ void Playspace::Rebase( const Mat34 &standing, const Mat34 &seated )
 {
 	m_standing = standing;
 	m_seated = seated;
-	m_hasBase = true;
 	Reset();
 }
 
@@ -36,26 +35,24 @@ void Playspace::RotateAbout( Vec3 pivot, double angle )
 
 Mat34 Playspace::Apply( const Mat34 &base ) const
 {
-	Mat34 out;
-	for ( int col = 0; col < 3; col++ )
+	Mat34 out = base;
+	const double c = std::cos( m_yaw ), s = std::sin( m_yaw );
+	for ( int col = 0; col < 4; col++ )
 	{
-		const Vec3 r = RotateY( { base.m[0][col], base.m[1][col], base.m[2][col] }, m_yaw );
-		out.m[0][col] = r.x;
-		out.m[1][col] = r.y;
-		out.m[2][col] = r.z;
+		out.m[0][col] = c * base.m[0][col] + s * base.m[2][col];
+		out.m[2][col] = -s * base.m[0][col] + c * base.m[2][col];
 	}
-	const Vec3 t = RotateY( base.translation(), m_yaw ) + m_t;
-	out.m[0][3] = t.x;
-	out.m[1][3] = t.y;
-	out.m[2][3] = t.z;
+	out.m[0][3] += m_t.x;
+	out.m[1][3] += m_t.y;
+	out.m[2][3] += m_t.z;
 	return out;
 }
 
 bool Playspace::InRange() const
 {
-	for ( const Mat34 &m : { Standing(), Seated() } )
+	for ( const Mat34 *base : { &m_standing, &m_seated } )
 	{
-		const Vec3 t = m.translation();
+		const Vec3 t = RotateY( base->translation(), m_yaw ) + m_t;
 		if ( !std::isfinite( t.x ) || !std::isfinite( t.y ) || !std::isfinite( t.z ) || std::fabs( t.x ) > kMaxOffset ||
 			std::fabs( t.y ) > kMaxOffset || std::fabs( t.z ) > kMaxOffset )
 			return false;
@@ -65,12 +62,7 @@ bool Playspace::InRange() const
 
 void DragGesture::Update( bool held, bool valid, Vec3 handRaw, double multiplier, bool lockHeight, Playspace &ps )
 {
-	if ( !held )
-	{
-		m_active = false;
-		return;
-	}
-	if ( !valid )
+	if ( !held || !valid )
 	{
 		m_active = false; // re-anchor when tracking returns, so there is no jump
 		return;
@@ -151,12 +143,15 @@ Mat34 ZeroPoseFromPoses( const Mat34 &raw, const Mat34 &uni )
 bool NearPose( const Mat34 &a, const Mat34 &b, double posTol, double rotTolRad )
 {
 	const Vec3 d = a.translation() - b.translation();
-	if ( std::sqrt( d.x * d.x + d.y * d.y + d.z * d.z ) > posTol )
+	const double distance = d.x * d.x + d.y * d.y + d.z * d.z;
+	if ( !std::isfinite( posTol ) || !std::isfinite( rotTolRad ) || posTol < 0 || rotTolRad < 0 ||
+		 !std::isfinite( distance ) || distance > posTol * posTol )
 		return false;
-	double trace = 0; // trace(R_a * R_b^T) = 1 + 2 cos(angle)
+	// For rotations, ||Ra - Rb||F^2 = 8 sin^2(angle/2), accurate even for identical/tiny rotations.
+	double error = 0;
 	for ( int r = 0; r < 3; r++ )
 		for ( int c = 0; c < 3; c++ )
-			trace += a.m[r][c] * b.m[r][c];
-	const double cosA = std::fmax( -1.0, std::fmin( 1.0, ( trace - 1.0 ) / 2.0 ) );
-	return std::acos( cosA ) <= rotTolRad;
+			error += ( a.m[r][c] - b.m[r][c] ) * ( a.m[r][c] - b.m[r][c] );
+	const double limit = std::sin( rotTolRad / 2 );
+	return std::isfinite( error ) && ( rotTolRad >= M_PI || error <= 8 * limit * limit );
 }

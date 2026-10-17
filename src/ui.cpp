@@ -1,6 +1,6 @@
 #include "ui.h"
+#include "pixels.h"
 
-#include <algorithm>
 #include <cmath>
 
 Canvas::Canvas( int width, int height ) : m_w( width ), m_h( height )
@@ -56,17 +56,7 @@ void Canvas::CopyRGBA( uint8_t *dest ) const
 	cairo_surface_flush( m_surface );
 	const uint8_t *src = cairo_image_surface_get_data( m_surface );
 	const int stride = cairo_image_surface_get_stride( m_surface );
-	for ( int y = 0; y < m_h; y++ )
-		for ( int x = 0; x < m_w; x++ )
-		{
-			const uint8_t *p = src + y * stride + x * 4; // little endian ARGB32 = B G R A, premultiplied
-			uint8_t *d = dest + ( y * m_w + x ) * 4;
-			const unsigned a = p[3];
-			d[0] = a ? (uint8_t)std::min( 255u, p[2] * 255u / a ) : 0;
-			d[1] = a ? (uint8_t)std::min( 255u, p[1] * 255u / a ) : 0;
-			d[2] = a ? (uint8_t)std::min( 255u, p[0] * 255u / a ) : 0;
-			d[3] = (uint8_t)a;
-		}
+	CopyARGB32ToRGBA( src, dest, m_w, m_h, stride );
 }
 
 bool Canvas::WritePng( const char *path ) const

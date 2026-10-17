@@ -41,7 +41,6 @@ private:
 	void HandlePanelEvent( const vr::VREvent_t &ev );
 
 	void Rebase();            // adopt SteamVR's current saved playspace as "original"
-	void ResetToOriginal();   // drop every move and show the saved playspace again
 	void ApplyIfChanged();
 	void CheckLivePreview( double now ); // is SteamVR still using the playspace we applied? re-apply if it silently dropped it
 	void Pause( bool restore );
@@ -55,8 +54,9 @@ private:
 	Tracked ReadPose( vr::TrackedDeviceIndex_t idx, const vr::TrackedDevicePose_t *poses ) const;
 
 	void RedrawPanel();
-	PanelCallbacks MakeCallbacks();
+	void HandlePanelAction( PanelAction action, double value );
 	bool MoveAllowed() const { return m_state == MoverState::Ready; }
+	bool GestureActive() const { return m_drag[0].Active() || m_drag[1].Active() || m_turn[0].Active() || m_turn[1].Active(); }
 
 	bool m_vrInit = false;
 	Settings m_settings;
@@ -92,7 +92,7 @@ private:
 	vr::VROverlayHandle_t m_thumb = vr::k_ulOverlayHandleInvalid;
 	ButtonPanel m_buttons;
 	bool m_panelDirty = true;
-	double m_lastPanel = 0;
+	double m_panelRetryAt = 0;
 	double m_lastBindingRefresh = -10;
 	bool m_bindingsStale = true;
 	int m_hover = -1;
