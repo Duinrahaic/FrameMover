@@ -40,7 +40,9 @@ private:
 	void RefreshBindings( double now );
 	void HandlePanelEvent( const vr::VREvent_t &ev );
 
-	void Rebase();            // adopt SteamVR's current saved playspace as "original"
+	void Rebase();            // adopt SteamVR's current saved playspace as "original", then re-apply the remembered floor offset
+	void ResetToOriginal();   // user asked for the original playspace: also forget the floor offset
+	void RememberFloor();     // persist the current vertical offset once it has settled
 	void ApplyIfChanged();
 	void CheckLivePreview( double now ); // is SteamVR still using the playspace we applied? re-apply if it silently dropped it
 	void Pause( bool restore );

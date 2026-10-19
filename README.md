@@ -19,9 +19,9 @@ The mover edits SteamVR's *working copy* of the standing and seated zero poses (
 * Crash or kill: SteamVR notices the preview owner is gone and reloads the saved chaperone itself (`vrserver` log: "Live chaperone preview process ... isn't running anymore, reloading saved chaperone").
 * Extra safety net: a copy of `chaperone_info.vrchap` is kept in `~/.local/share/frame-mover/backup/` at every start and install (one per distinct content, newest 10).
 * Grabbing uses controller positions in *raw* tracking space, so the move does not feed back into the measurement. Both the standing and the seated universe move together.
-* Tracking universe change, recenter, or finished room setup: the new saved playspace becomes the baseline (moves are dropped). SteamVR room setup in progress: the mover steps aside and puts everything back first.
+* Tracking universe change, recenter, or finished room setup: the new saved playspace becomes the baseline (moves are dropped, except the floor height, see below). SteamVR room setup in progress: the mover steps aside and puts everything back first.
 * Quitting the mover (dashboard Close, SIGTERM, SteamVR shutdown) restores the original.
-* Moves are not remembered across restarts of the mover.
+* **Floor height is remembered**: the vertical offset (raise / lower, or grabbing up / down) is saved as `floorOffset` in `config.ini` and re-applied on top of every new baseline, so it survives reconnects, recenters, new tracking universes and restarts of the mover. **Reset to original** clears it. Horizontal moves and turns are not remembered.
 
 ## Default controls (Steam Frame controllers)
 
@@ -105,4 +105,4 @@ In rare cases SteamVR still replaces the live playspace with the saved one and t
   if SteamVR replaces it three times in 20 s.
 * What causes SteamVR to drop it is not established. Candidates seen in `vrserver.txt`: the `cv` driver's once-a-minute "Preserving worlds ..." followed by
   "Read chaperone JSON", relocalization (a new universe id appears in the saved file every few hours), recenter (system-button long press), and the
-  Frame's own room-setup start/cancel (`ERoomSetupStep_RoomSetupFull`). A recenter or room-setup event is, by design, taken as a new original, which drops the move.
+  Frame's own room-setup start/cancel (`ERoomSetupStep_RoomSetupFull`). A recenter or room-setup event is, by design, taken as a new original, which drops the move (the remembered floor height is re-applied).

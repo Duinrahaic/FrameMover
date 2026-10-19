@@ -1,6 +1,9 @@
 #pragma once
 #include <string>
 
+// Largest remembered floor offset, either way, in meters.
+constexpr float kMaxFloorOffset = 10.0f;
+
 // User-adjustable settings, persisted to ~/.config/frame-mover/config.ini.
 // Button assignments are NOT here: they are SteamVR Input bindings (see data/bindings and the "Edit bindings" button).
 struct Settings
@@ -8,6 +11,7 @@ struct Settings
 	float dragMultiplier = 1.0f; // world moves this many times the hand movement
 	float snapDegrees = 45.0f;   // size of one snap turn
 	float heightSpeed = 0.5f;    // meters per second while "raise me / lower me" is held
+	float floorOffset = 0.0f;    // vertical world offset in meters, kept across reconnects and restarts; cleared by Reset
 	bool lockHeight = false;     // grab-and-move ignores vertical hand movement
 	bool leftHand = true;        // left controller may grab
 	bool rightHand = true;       // right controller may grab

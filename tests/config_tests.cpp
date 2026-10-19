@@ -97,7 +97,7 @@ int main()
 		CHECK( Same( LoadSettings(), s ) );
 		const std::string configFile = ConfigDir() + "/config.ini";
 		CHECK( files::ReadFile( configFile, read ) );
-		CHECK( read == "dragMultiplier=1.23456\nsnapDegrees=123.456\nheightSpeed=0.678901\n"
+		CHECK( read == "dragMultiplier=1.23456\nsnapDegrees=123.456\nheightSpeed=0.678901\nfloorOffset=0\n"
 			"lockHeight=1\nleftHand=0\nrightHand=0\nhaptics=0\ndoublePress=0\n"
 			"largeChaperone=0\ndisableChaperone=1\noverrideGameInput=1\n" );
 		s.dragMultiplier = 1.23456789f;

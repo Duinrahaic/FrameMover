@@ -138,6 +138,9 @@ void App::Rebase()
 	if ( m_chaperone.Capture( standing, seated ) )
 	{
 		m_playspace.Rebase( standing, seated );
+		// A reconnect, recenter or new tracking universe makes SteamVR's saved playspace the new original; the floor
+		// the user set is still wanted there.
+		m_playspace.Translate( { 0, m_settings.floorOffset, 0 } );
 		m_state = MoverState::Ready;
 	}
 	else
@@ -146,6 +149,25 @@ void App::Rebase()
 	m_appliedOffset = {};
 	m_appliedYaw = 0;
 	m_panelDirty = true;
+}
+
+void App::ResetToOriginal()
+{
+	if ( m_settings.floorOffset != 0 )
+	{
+		m_settings.floorOffset = 0;
+		SaveSettings( m_settings );
+	}
+	Rebase();
+}
+
+void App::RememberFloor()
+{
+	const float y = std::clamp( (float)m_playspace.Offset().y, -kMaxFloorOffset, kMaxFloorOffset );
+	if ( y == m_settings.floorOffset )
+		return;
+	m_settings.floorOffset = y;
+	SaveSettings( m_settings );
 }
 
 void App::Pause( bool restore )
@@ -167,7 +189,7 @@ void App::ApplyIfChanged()
 	if ( !m_playspace.Moved() )
 	{
 		if ( m_chaperone.PreviewShown() )
-			Rebase();
+			ResetToOriginal(); // moved back exactly to the original: the remembered floor is gone too
 		return;
 	}
 	if ( !m_playspace.InRange() )
@@ -446,7 +468,7 @@ void App::Tick()
 			else if ( !m_resetFired && now - m_resetHeldSince >= kResetHoldSeconds )
 			{
 				m_resetFired = true;
-				Rebase();
+				ResetToOriginal();
 				Pulse( true );
 			}
 		}
@@ -457,6 +479,8 @@ void App::Tick()
 	if ( MoveAllowed() )
 	{
 		ApplyIfChanged();
+		if ( !GestureActive() && !( haveInput && in.heightUp != in.heightDown ) )
+			RememberFloor();
 		if ( m_playspace.Moved() && now >= m_nextExternalCheck )
 		{
 			m_nextExternalCheck = now + 0.25;
@@ -500,7 +524,7 @@ void App::HandlePanelAction( PanelAction action, double value )
 	switch ( action )
 	{
 	case A::Reset:
-		Rebase();
+		ResetToOriginal();
 		return;
 	case A::EditBindings:
 		if ( !m_inputOk || !m_actions.OpenBindingEditor( kAppKey ) )
@@ -617,6 +641,7 @@ int App::SelfTest()
 			failures++;
 	};
 	IVRChaperoneSetup *cs = VRChaperoneSetup();
+	m_settings.floorOffset = 0; // the checks below expect a rebase to give the untouched saved playspace (not saved to config)
 
 	if ( m_inputOk )
 	{

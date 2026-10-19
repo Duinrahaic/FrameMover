@@ -18,6 +18,7 @@ constexpr Field<float> kFloats[] = {
 	{ "dragMultiplier", &Settings::dragMultiplier },
 	{ "snapDegrees", &Settings::snapDegrees },
 	{ "heightSpeed", &Settings::heightSpeed },
+	{ "floorOffset", &Settings::floorOffset },
 };
 constexpr Field<bool> kBools[] = {
 	{ "lockHeight", &Settings::lockHeight },
@@ -53,6 +54,7 @@ Settings Clamped( Settings s )
 	s.dragMultiplier = std::clamp( s.dragMultiplier, 0.25f, 4.0f );
 	s.snapDegrees = std::clamp( s.snapDegrees, 5.0f, 180.0f );
 	s.heightSpeed = std::clamp( s.heightSpeed, 0.1f, 2.0f );
+	s.floorOffset = std::clamp( s.floorOffset, -kMaxFloorOffset, kMaxFloorOffset );
 	return s;
 }
 
